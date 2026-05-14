@@ -21,5 +21,17 @@ class UserNotFoundError(AppError):
     """Raised when a requested user cannot be found."""
 
 
+class TeamNotFoundError(AppError):
+    """Raised when a requested team cannot be found."""
+
+
+class AlreadyMemberError(AppError):
+    """Raised when adding a user who is already in a team."""
+
+
+class MemberNotFoundError(AppError):
+    """Raised when a requested team membership cannot be found."""
+
+
 class AccessDeniedError(AppError):
     """Raised when a user requests a resource outside their accessible scope."""

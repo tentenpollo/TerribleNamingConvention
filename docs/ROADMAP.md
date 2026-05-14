@@ -203,6 +203,7 @@ These are explicitly out of scope for v1. Do not let them creep in.
 
 | Feature | Notes |
 |---|---|
+| Pagination on list endpoints (teams, projects, documents) | Unbounded lists fine for v1 scale | !IMPORTANT
 | Notion ingestion adapter | Read from Notion database/pages |
 | Slack ingestion adapter | Ingest channel history per project |
 | Google Docs adapter | Read from Drive folder |
