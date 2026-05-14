@@ -19,3 +19,7 @@ class InvalidCredentialsError(AppError):
 
 class UserNotFoundError(AppError):
     """Raised when a requested user cannot be found."""
+
+
+class AccessDeniedError(AppError):
+    """Raised when a user requests a resource outside their accessible scope."""

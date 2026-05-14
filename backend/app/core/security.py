@@ -29,7 +29,7 @@ def create_access_token(user_id: uuid.UUID, role: str) -> str:
         "role": role,
         "exp": expire,
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
+    return str(jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM))
 
 
 def decode_access_token(token: str) -> dict[str, object]:

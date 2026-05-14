@@ -7,6 +7,7 @@ from fastapi import Depends, Header, HTTPException, status
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access import get_accessible_project_ids
 from app.core.database import AsyncSessionLocal
 from app.core.roles import Role, has_permission
 from app.core.security import decode_access_token
@@ -50,6 +51,13 @@ async def get_current_user(
         raise _unauthorized()
 
     return user
+
+
+async def get_accessible_projects(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[uuid.UUID]:
+    return await get_accessible_project_ids(current_user, session)
 
 
 def require_role(required: Role) -> Callable[..., Awaitable[User]]:
