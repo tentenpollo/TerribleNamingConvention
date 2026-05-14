@@ -192,34 +192,6 @@ class TestGetMe:
         assert response.status_code == 401
 
 
-class TestProtected:
-    @pytest.mark.asyncio
-    async def test_protected_with_valid_token_returns_user_context(
-        self,
-        async_client: AsyncClient,
-    ) -> None:
-        user = _make_user()
-        token = create_access_token(user.id, user.role)
-        _override_session_user(user)
-
-        response = await async_client.get(
-            "/protected",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-        app.dependency_overrides.clear()
-        assert response.status_code == 200
-        assert response.json() == {"user_id": str(user.id), "role": user.role}
-
-    @pytest.mark.asyncio
-    async def test_protected_with_no_token_returns_401(
-        self,
-        async_client: AsyncClient,
-    ) -> None:
-        response = await async_client.get("/protected")
-        assert response.status_code == 401
-
-
 def _make_user() -> User:
     return User(
         id=uuid.uuid4(),

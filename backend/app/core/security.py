@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 import uuid
 
 import jwt
@@ -32,4 +33,4 @@ def create_access_token(user_id: uuid.UUID, role: str) -> str:
 
 
 def decode_access_token(token: str) -> dict[str, object]:
-    return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
+    return cast(dict[str, object], jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM]))

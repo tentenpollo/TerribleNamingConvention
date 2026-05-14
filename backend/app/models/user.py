@@ -1,20 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-import enum
 import uuid
 
 from sqlalchemy import Boolean, String, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.roles import Role
 from app.models.base import Base
-
-
-class Role(enum.StrEnum):
-    MEMBER = "member"
-    ADMIN = "admin"
-    SUPER_ADMIN = "super_admin"
 
 
 class User(Base):

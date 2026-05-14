@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 import uuid
 
 from fastapi import Depends, Header, HTTPException, status
@@ -8,6 +8,7 @@ import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
+from app.core.roles import Role, has_permission
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.services.auth import AuthService
@@ -49,6 +50,27 @@ async def get_current_user(
         raise _unauthorized()
 
     return user
+
+
+def require_role(required: Role) -> Callable[..., Awaitable[User]]:
+    async def dependency(current_user: User = Depends(get_current_user)) -> User:
+        try:
+            user_role = Role(current_user.role)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            ) from None
+
+        if not has_permission(user_role, required):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+
+        return current_user
+
+    return dependency
 
 
 def _unauthorized() -> HTTPException:

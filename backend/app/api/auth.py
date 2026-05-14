@@ -10,7 +10,6 @@ from app.schemas.user import LoginRequest, TokenResponse, UserCreate, UserRespon
 from app.services.auth import AuthService
 
 router = APIRouter(prefix="/auth")
-protected_router = APIRouter()
 
 
 @router.post(
@@ -43,13 +42,6 @@ async def get_me(
     current_user: User = Depends(get_current_user),
 ) -> UserResponse:
     return UserResponse.model_validate(current_user)
-
-
-@protected_router.get("/protected")
-async def protected(
-    current_user: User = Depends(get_current_user),
-) -> dict[str, str]:
-    return {"user_id": str(current_user.id), "role": current_user.role}
 
 
 async def duplicate_email_handler(
