@@ -17,7 +17,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, tags=["auth"])
     app.include_router(teams.router, tags=["teams"])
 
-    if settings.app_env == "development":
+    if settings.app_env in ("development", "test"):
         from app.api import dev
 
         app.include_router(dev.router, tags=["test"])
