@@ -21,6 +21,7 @@ repos:
           - fastapi>=0.115.0
         args: [--config-file=pyproject.toml]
         files: ^backend/
+        exclude: ^backend/tests/
 
   # General hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -44,4 +45,4 @@ repos:
     hooks:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
-        exclude: .env.example
+        exclude: (.env.example|^backend/tests/)

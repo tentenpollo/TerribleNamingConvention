@@ -19,6 +19,8 @@ dependencies = [
     "pydantic-settings>=2.3.0",
     "pyjwt>=2.9.0",
     "passlib[bcrypt]>=1.7.4",
+    "bcrypt<4.1",
+    "email-validator>=2.0.0",
     "python-multipart>=0.0.9",
     "litellm>=1.40.0",
     "fastembed>=0.3.0",
@@ -77,7 +79,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = [
+"backend/tests/**/*.py" = [
     "ANN",     # no annotation requirements in tests
     "S",       # no security lint in tests
     "T20",     # allow print in tests
@@ -98,7 +100,7 @@ skip-magic-trailing-comma = false
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["backend/tests"]
 pythonpath = ["backend"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
@@ -114,7 +116,7 @@ filterwarnings = [
     "ignore::PendingDeprecationWarning",
 ]
 # Run unit tests by default; integration tests opt-in
-addopts = "-v --cov=app --cov-report=term-missing -m 'not integration and not e2e'"
+addopts = "-v --cov=app --cov-report=term-missing --import-mode=importlib -m 'not integration and not e2e'"
 
 # ---------------------------------------------------------------------------
 # Coverage
