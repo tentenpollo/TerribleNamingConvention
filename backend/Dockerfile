@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN pip install --no-cache-dir --upgrade pip>=26.1
+
 COPY pyproject.toml .
 COPY README.md .
 COPY backend/ ./backend/
