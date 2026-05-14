@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
+import uuid
 
 from httpx import AsyncClient
+import jwt
 import pytest
 
-from app.models.user import Role
+from app.core.config import settings
+from app.core.dependencies import get_async_session
+from app.core.security import ALGORITHM, create_access_token
+from app.main import app
+from app.models.user import Role, User
 
 
 class TestRegister:
@@ -125,7 +132,110 @@ class TestLogin:
 
 class TestGetMe:
     @pytest.mark.asyncio
-    async def test_get_me_stub(self, async_client: AsyncClient) -> None:
-        response = await async_client.get("/auth/me")
+    async def test_get_me_with_valid_token_returns_user_data(
+        self,
+        async_client: AsyncClient,
+    ) -> None:
+        user = _make_user()
+        token = create_access_token(user.id, user.role)
+        _override_session_user(user)
+
+        response = await async_client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        app.dependency_overrides.clear()
         assert response.status_code == 200
-        assert response.json()["message"] == "not implemented yet"
+        data = response.json()
+        assert data["id"] == str(user.id)
+        assert data["email"] == user.email
+        assert data["role"] == user.role
+        assert data["is_active"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_me_with_no_token_returns_401(self, async_client: AsyncClient) -> None:
+        response = await async_client.get("/auth/me")
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_get_me_with_malformed_token_returns_401(
+        self,
+        async_client: AsyncClient,
+    ) -> None:
+        response = await async_client.get(
+            "/auth/me",
+            headers={"Authorization": "Bearer not-a-jwt"},
+        )
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_get_me_with_expired_token_returns_401(
+        self,
+        async_client: AsyncClient,
+    ) -> None:
+        token = jwt.encode(
+            {
+                "sub": str(uuid.uuid4()),
+                "role": Role.MEMBER.value,
+                "exp": datetime.now(UTC) - timedelta(minutes=1),
+            },
+            settings.jwt_secret,
+            algorithm=ALGORITHM,
+        )
+
+        response = await async_client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 401
+
+
+class TestProtected:
+    @pytest.mark.asyncio
+    async def test_protected_with_valid_token_returns_user_context(
+        self,
+        async_client: AsyncClient,
+    ) -> None:
+        user = _make_user()
+        token = create_access_token(user.id, user.role)
+        _override_session_user(user)
+
+        response = await async_client.get(
+            "/protected",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        app.dependency_overrides.clear()
+        assert response.status_code == 200
+        assert response.json() == {"user_id": str(user.id), "role": user.role}
+
+    @pytest.mark.asyncio
+    async def test_protected_with_no_token_returns_401(
+        self,
+        async_client: AsyncClient,
+    ) -> None:
+        response = await async_client.get("/protected")
+        assert response.status_code == 401
+
+
+def _make_user() -> User:
+    return User(
+        id=uuid.uuid4(),
+        email="user@example.com",
+        hashed_password="hashed",
+        role=Role.MEMBER.value,
+        is_active=True,
+        created_at=datetime.now(UTC),
+    )
+
+
+def _override_session_user(user: User | None) -> None:
+    session = AsyncMock()
+    session.get.return_value = user
+
+    async def override_get_async_session():
+        yield session
+
+    app.dependency_overrides[get_async_session] = override_get_async_session

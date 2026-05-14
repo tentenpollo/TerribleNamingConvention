@@ -14,6 +14,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Project API", version="0.1.0")
     app.include_router(health.router, tags=["health"])
     app.include_router(auth.router, tags=["auth"])
+    app.include_router(auth.protected_router, tags=["auth"])
 
     app.add_exception_handler(DuplicateEmailError, duplicate_email_handler)  # type: ignore[arg-type]
     app.add_exception_handler(InvalidCredentialsError, invalid_credentials_handler)  # type: ignore[arg-type]
