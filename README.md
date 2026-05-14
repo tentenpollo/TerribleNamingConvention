@@ -41,7 +41,7 @@ git clone https://github.com/[your-handle]/[PROJECT_NAME].git
 cd [PROJECT_NAME]
 cp .env.example .env
 # Edit .env with your LLM API key and preferred settings
-docker compose up
+docker compose -f docker-compose.dev.yml up
 ```
 
 The app will be available at `http://localhost:3000`.
@@ -67,7 +67,7 @@ API docs at `http://localhost:8000/docs`.
 | LLM Interface | LiteLLM |
 | Database | PostgreSQL 16 |
 | Task Queue | ARQ + Redis |
-| Frontend | Next.js 14 |
+| Frontend | Next.js 16 |
 | Auth | JWT + RBAC |
 | Containerization | Docker Compose |
 
@@ -78,14 +78,14 @@ Full stack rationale in [`/docs/STACK.md`](/docs/STACK.md).
 ## Project Structure
 
 ```
-/backend          FastAPI application
+/backend/app      FastAPI application
 /frontend         Next.js application
-/workers          ARQ background job definitions
-/tests            Pytest test suite
+/backend/tests    Pytest test suite
+/backend/alembic  Database migrations
 /docs             Architecture, stack, rules, roadmap
 /tasks            Feature files and task breakdowns
-docker-compose.yml
 docker-compose.dev.yml
+.env.example
 pyproject.toml
 ```
 

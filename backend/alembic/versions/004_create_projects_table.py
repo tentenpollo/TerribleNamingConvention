@@ -1,4 +1,4 @@
-"""Create projects table.
+"""Create projects table with ingestion config.
 
 Revision ID: 004_create_projects_table
 Revises: 003_create_team_members_table
@@ -30,8 +30,15 @@ def upgrade() -> None:
             server_default=sa.text("gen_random_uuid()"),
             nullable=False,
         ),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column("description", sa.Text(), nullable=True),
         sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("name", sa.String(), nullable=False),
+        sa.Column(
+            "config",
+            postgresql.JSONB(),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
         sa.Column(
             "created_at",
             postgresql.TIMESTAMP(timezone=True),

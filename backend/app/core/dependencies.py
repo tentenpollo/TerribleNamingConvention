@@ -13,6 +13,7 @@ from app.core.roles import Role, has_permission
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.services.auth import AuthService
+from app.services.project import ProjectService
 from app.services.team import TeamService
 
 
@@ -31,6 +32,12 @@ async def get_team_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TeamService:
     return TeamService(session)
+
+
+async def get_project_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> ProjectService:
+    return ProjectService(session)
 
 
 async def get_current_user(

@@ -25,6 +25,10 @@ class TeamNotFoundError(AppError):
     """Raised when a requested team cannot be found."""
 
 
+class ProjectNotFoundError(AppError):
+    """Raised when a requested project cannot be found."""
+
+
 class AlreadyMemberError(AppError):
     """Raised when adding a user who is already in a team."""
 

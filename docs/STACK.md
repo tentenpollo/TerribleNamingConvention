@@ -100,7 +100,7 @@
 
 ---
 
-## Frontend — Next.js 14
+## Frontend — Next.js 16
 
 **Why Next.js:**
 - App Router is well-suited for the mix of static and dynamic pages this project has

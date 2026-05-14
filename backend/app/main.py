@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from app.api import auth, health, teams
+from app.api import auth, health, projects, teams
 from app.api.auth import (
     duplicate_email_handler,
     invalid_credentials_handler,
@@ -16,6 +16,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, tags=["health"])
     app.include_router(auth.router, tags=["auth"])
     app.include_router(teams.router, tags=["teams"])
+    app.include_router(projects.router, tags=["projects"])
 
     if settings.app_env in ("development", "test"):
         from app.api import dev

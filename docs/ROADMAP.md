@@ -19,20 +19,20 @@
 
 | Task | Status |
 |---|---|
-| Monorepo directory structure | ⬜ |
-| Docker Compose (FastAPI, Postgres, Redis, Qdrant, Next.js) | ⬜ |
-| docker-compose.dev.yml with hot reload | ⬜ |
-| Alembic initialized, first migration (users table) | ⬜ |
-| Pytest configured with pytest-asyncio + HTTPX | ⬜ |
-| Ruff linting + formatting configured in pyproject.toml | ⬜ |
-| mypy configured | ⬜ |
-| pre-commit hooks wired | ⬜ |
-| .env.example with all required vars | ⬜ |
-| GitHub repo, branch protection on main, PR template | ⬜ |
-| Health check endpoint GET /health | ⬜ |
-| CI pipeline (GitHub Actions) — lint + test on PR | ⬜ |
+| Monorepo directory structure | ✅ |
+| Docker Compose (FastAPI, Postgres, Redis, Qdrant, Next.js) | ✅ |
+| docker-compose.dev.yml with hot reload | ✅ |
+| Alembic initialized, first migration (users table) | ✅ |
+| Pytest configured with pytest-asyncio + HTTPX | ✅ |
+| Ruff linting + formatting configured in pyproject.toml | ✅ |
+| mypy configured | ✅ |
+| pre-commit hooks wired | ✅ |
+| .env.example with all required vars | ✅ |
+| PR template | ✅ |
+| Health check endpoint GET /health | ✅ |
+| CI pipeline (GitHub Actions) — lint + test on PR | ✅ |
 
-**Done when:** `docker compose up` runs clean, health check returns 200, one passing test in CI.
+**Done when:** `docker compose -f docker-compose.dev.yml up` runs clean, health check returns 200, all tests pass.
 
 ---
 
@@ -41,20 +41,20 @@
 
 | Task | Status |
 |---|---|
-| Postgres schema: users, teams, team_members, projects | ⬜ |
-| Alembic migrations for all four tables | ⬜ |
-| User registration endpoint POST /auth/register | ⬜ |
-| User login endpoint POST /auth/login → JWT | ⬜ |
-| GET /auth/me endpoint | ⬜ |
-| JWT middleware — extract user + role from token | ⬜ |
-| RBAC dependency — require_role(Role.X) composable | ⬜ |
-| Access scope helper — get_accessible_project_ids(user) | ⬜ |
-| Team CRUD endpoints (admin only) | ⬜ |
-| Project CRUD endpoints | ⬜ |
-| Team member assignment | ⬜ |
-| Tests: register, login, token validation | ⬜ |
-| Tests: role enforcement — member cannot hit admin routes | ⬜ |
-| Tests: access scope returns correct project IDs per user | ⬜ |
+| Postgres schema: users, teams, team_members, projects | ✅ |
+| Alembic migrations for all four tables | ✅ |
+| User registration endpoint POST /auth/register | ✅ |
+| User login endpoint POST /auth/login → JWT | ✅ |
+| GET /auth/me endpoint | ✅ |
+| JWT middleware — extract user + role from token | ✅ |
+| RBAC dependency — require_role(Role.X) composable | ✅ |
+| Access scope helper — get_accessible_project_ids(user) | ✅ |
+| Team CRUD endpoints (admin only) | ✅ |
+| Project CRUD endpoints | ✅ |
+| Team member assignment | ✅ |
+| Tests: register, login, token validation | ✅ |
+| Tests: role enforcement — member cannot hit admin routes | ✅ |
+| Tests: access scope returns correct project IDs per user | ✅ |
 
 **Done when:** A member cannot access another team's projects at the API level.
 
