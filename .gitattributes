@@ -1,0 +1,50 @@
+# =============================================================================
+# Default behavior — normalize line endings to LF on commit
+# =============================================================================
+* text=auto eol=lf
+
+# =============================================================================
+# Explicitly LF (source files)
+# =============================================================================
+*.py        text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.jsx       text eol=lf
+*.json      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.sh        text eol=lf
+*.env       text eol=lf
+*.example   text eol=lf
+Dockerfile  text eol=lf
+Makefile    text eol=lf
+
+# =============================================================================
+# Binary — do not touch line endings
+# =============================================================================
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.tar.gz    binary
+*.whl       binary
+
+# =============================================================================
+# Diff drivers — show meaningful diffs for specific types
+# =============================================================================
+*.md        diff=markdown
+*.py        diff=python
+
+# =============================================================================
+# Linguist — GitHub language stats
+# =============================================================================
+docs/**             linguist-documentation=true
+tasks/**            linguist-documentation=true
+alembic/versions/** linguist-generated=true

@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check backend tests
+
+      - name: Ruff format check
+        run: ruff format --check backend tests
+
+      - name: Mypy type check
+        run: mypy backend/app
+
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest -m "not integration and not e2e" --cov=app --cov-report=xml
+        env:
+          APP_ENV: test
+          JWT_SECRET: test-secret-do-not-use-in-production
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run migrations
+        run: cd backend && alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/testdb
+
+      - name: Run integration tests
+        run: pytest -m integration -v
+        env:
+          APP_ENV: test
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/testdb
+          REDIS_URL: redis://localhost:6379/0
+          QDRANT_URL: http://localhost:6333
+          JWT_SECRET: test-secret-do-not-use-in-production
+          LITELLM_QUERY_MODEL: gpt-4o-mini
+          LITELLM_CONTEXT_MODEL: gpt-4o-mini
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
