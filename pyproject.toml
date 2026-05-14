@@ -116,7 +116,7 @@ filterwarnings = [
     "ignore::PendingDeprecationWarning",
 ]
 # Run unit tests by default; integration tests opt-in
-addopts = "-v --cov=app --cov-report=term-missing --import-mode=importlib -m 'not integration and not e2e'"
+addopts = "-v --import-mode=importlib -m 'not integration and not e2e'"
 
 # ---------------------------------------------------------------------------
 # Coverage
