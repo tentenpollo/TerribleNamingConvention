@@ -39,3 +39,15 @@ class MemberNotFoundError(AppError):
 
 class AccessDeniedError(AppError):
     """Raised when a user requests a resource outside their accessible scope."""
+
+
+class DocumentNotFoundError(AppError):
+    """Raised when a requested document cannot be found."""
+
+
+class IngestionJobNotFoundError(AppError):
+    """Raised when a requested ingestion job cannot be found."""
+
+
+class UnsupportedFileTypeError(AppError):
+    """Raised when an uploaded file type is not supported."""

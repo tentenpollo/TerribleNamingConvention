@@ -16,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import settings
 from app.models.base import Base
+from app.models.document import Document  # noqa: F401
+from app.models.document_summary import DocumentSummary  # noqa: F401
+from app.models.ingestion_job import IngestionJob  # noqa: F401
 from app.models.project import Project  # noqa: F401
 from app.models.team import Team, TeamMember  # noqa: F401
 from app.models.user import User  # noqa: F401

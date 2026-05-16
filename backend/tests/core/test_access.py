@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 import uuid
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import get_accessible_project_ids
@@ -19,6 +20,15 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 async def session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as db_session:
+        # Truncate all tables in one statement — CASCADE handles FK ordering
+        await db_session.execute(
+            text(
+                "TRUNCATE ingestion_jobs, document_summaries, documents, "
+                "projects, team_members, teams, users "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+        await db_session.commit()
         yield db_session
         await db_session.rollback()
     await engine.dispose()
