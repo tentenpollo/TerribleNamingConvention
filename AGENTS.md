@@ -47,23 +47,36 @@ npm run dev
 
 ## How to Run Tests
 
+Activate the virtual environment first:
 ```bash
-# All tests
-pytest
-
-# Specific module
-pytest tests/test_auth.py
-
-# With coverage
-pytest --cov=app --cov-report=term-missing
-
-# Verbose
-pytest -v
+source .venv/bin/activate
 ```
 
-Tests require Postgres, Redis, and Qdrant running. Use:
+Run from the project root (`/home/sandro/Documents/BaseProject`), not from `backend/`. The `pythonpath = ["backend"]` in `pyproject.toml` handles the import path.
+
 ```bash
-docker compose -f docker-compose.dev.yml up postgres redis qdrant
+# All tests (unit only by default — skips integration/e2e)
+pytest --import-mode=importlib -m "not integration and not e2e"
+
+# Integration tests only (requires Postgres, Redis, Qdrant running)
+pytest --import-mode=importlib -m integration
+
+# All tests including integration
+pytest --import-mode=importlib
+
+# Specific module
+pytest --import-mode=importlib backend/tests/ingestion/test_parser.py
+
+# With coverage
+pytest --import-mode=importlib --cov=app --cov-report=term-missing
+
+# Verbose
+pytest --import-mode=importlib -v
+```
+
+Prerequisites for integration tests:
+```bash
+docker compose -f docker-compose.dev.yml up postgres redis qdrant -d
 ```
 
 ---
