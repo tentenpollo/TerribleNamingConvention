@@ -11,6 +11,8 @@ from app.core.access import get_accessible_project_ids
 from app.core.database import AsyncSessionLocal
 from app.core.roles import Role, has_permission
 from app.core.security import decode_access_token
+from app.ingestion.embedder import Embedder
+from app.ingestion.embedder import get_embedder as _get_embedder
 from app.models.user import User
 from app.services.auth import AuthService
 from app.services.project import ProjectService
@@ -100,3 +102,7 @@ def _unauthorized() -> HTTPException:
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
     )
+
+
+def get_embedder() -> Embedder:
+    return _get_embedder()
