@@ -51,3 +51,7 @@ class IngestionJobNotFoundError(AppError):
 
 class UnsupportedFileTypeError(AppError):
     """Raised when an uploaded file type is not supported."""
+
+
+class QdrantError(AppError):
+    """Raised when a Qdrant operation fails unexpectedly."""

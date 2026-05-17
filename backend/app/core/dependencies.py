@@ -9,10 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import get_accessible_project_ids
 from app.core.database import AsyncSessionLocal
+from app.core.qdrant import get_qdrant_client
 from app.core.roles import Role, has_permission
 from app.core.security import decode_access_token
 from app.ingestion.embedder import Embedder
 from app.ingestion.embedder import get_embedder as _get_embedder
+from app.ingestion.vector_store import VectorStore
 from app.models.user import User
 from app.services.auth import AuthService
 from app.services.project import ProjectService
@@ -102,6 +104,16 @@ def _unauthorized() -> HTTPException:
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
     )
+
+
+_vector_store: VectorStore | None = None
+
+
+def get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore(client=get_qdrant_client())
+    return _vector_store
 
 
 def get_embedder() -> Embedder:
