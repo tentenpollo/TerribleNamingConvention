@@ -14,11 +14,23 @@ from app.models.project import Project
 from app.workers.ingest import ingest_document
 
 _SUMMARY_MOCK_RETURN = {
+    "summary": "A test document for ingestion pipeline verification.",
     "key_points": ["test summary"],
+    "technical_concepts": [],
+    "architectural_components": [],
     "decisions": [],
     "action_items": [],
-    "people_mentioned": [],
+    "entities": {
+        "people": [],
+        "organizations": [],
+        "technologies": [],
+        "repositories": [],
+        "services": [],
+    },
     "topics": ["test"],
+    "important_relationships": [],
+    "document_type": "other",
+    "confidence": 0.9,
 }
 
 
@@ -252,7 +264,25 @@ async def test_ingest_document_full_pipeline() -> None:
     with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
         with patch(
             "app.workers.ingest.summarize_document",
-            return_value={"key_points": ["test"], "raw_text_fallback": False},
+            return_value={
+                "summary": "Integration test document.",
+                "key_points": ["test"],
+                "technical_concepts": [],
+                "architectural_components": [],
+                "decisions": [],
+                "action_items": [],
+                "entities": {
+                    "people": [],
+                    "organizations": [],
+                    "technologies": [],
+                    "repositories": [],
+                    "services": [],
+                },
+                "topics": [],
+                "important_relationships": [],
+                "document_type": "other",
+                "confidence": 0.9,
+            },
         ):
             async with database.AsyncSessionLocal() as session:
                 team = Team(name="Ingest Worker Integration Team")

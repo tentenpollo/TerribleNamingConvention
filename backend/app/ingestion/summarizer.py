@@ -7,17 +7,80 @@ from app.core.llm import llm_call
 from app.core.logging import logger
 
 _SUMMARY_PROMPT = (
-    "You are a document summarization assistant. Analyze the following document "
-    "and return a JSON object with these fields:\n\n"
-    "- key_points: list of up to 5 main points\n"
-    "- decisions: list of any decisions mentioned (may be empty)\n"
-    "- action_items: list of any action items or tasks (may be empty)\n"
-    "- people_mentioned: list of names of people mentioned (may be empty)\n"
-    "- topics: list of up to 5 main topics covered (short tags)\n\n"
-    "Return ONLY valid JSON. No markdown, no explanation, no code fences.\n\n"
+    "You are an expert software project memory extraction system.\n\n"
+    "Your task is to analyze a document and extract durable, retrieval-optimized "
+    "knowledge for a long-term AI memory engine.\n\n"
+    "The output will be stored inside a Context-Augmented Generation (CAG) system "
+    "that combines vector retrieval (RAG), evolving project belief states, semantic "
+    "memory, and architectural context tracking.\n\n"
+    "Focus on preserving:\n"
+    "- technical intent\n"
+    "- architectural decisions\n"
+    "- implementation details\n"
+    "- APIs, models, systems, workflows\n"
+    "- constraints and assumptions\n"
+    "- important entities and concepts\n\n"
+    "Avoid:\n"
+    "- fluff, repetition, vague summaries\n"
+    "- generic phrasing\n"
+    "- speculative information\n\n"
+    "Rules:\n"
+    "- Return ONLY valid JSON\n"
+    "- No markdown, no explanations, no code fences\n"
+    "- Every field must exist — use empty arrays when no data exists\n"
+    "- Do not invent information not present in the document\n"
+    "- Keep summaries dense and information-rich\n\n"
+    "Required JSON schema:\n"
+    "{{\n"
+    '  "summary": "Concise high-signal overview of the document",\n'
+    '  "key_points": ["..."],\n'
+    '  "technical_concepts": ["..."],\n'
+    '  "architectural_components": ["..."],\n'
+    '  "decisions": [{{"decision": "...", "reasoning": "..."}}],\n'
+    '  "action_items": [\n'
+    '    {{"task": "...", "owner": "...", "status": "open|in_progress|done|unknown"}}\n'
+    "  ],\n"
+    '  "entities": {{\n'
+    '    "people": ["..."], "organizations": ["..."], "technologies": ["..."],\n'
+    '    "repositories": ["..."], "services": ["..."]\n'
+    "  }},\n"
+    '  "topics": ["..."],\n'
+    '  "important_relationships": '
+    '[{{"source": "...", "relationship": "...", "target": "..."}}],\n'
+    '  "document_type": "meeting_notes|architecture|specification|code|'
+    'design_doc|research|other",\n'
+    '  "confidence": 0.0\n'
+    "}}\n\n"
+    "Field requirements:\n"
+    "- key_points: max 8 items\n"
+    "- technical_concepts: libraries, algorithms, protocols, infrastructure, patterns\n"
+    "- architectural_components: services, databases, APIs, pipelines, agents, subsystems\n"
+    "- topics: short retrieval-friendly tags\n"
+    "- confidence: float between 0 and 1 representing extraction confidence\n\n"
     "Document filename: {filename}\n\n"
     "Document content:\n{text}\n"
 )
+
+_FALLBACK: dict[str, object] = {
+    "summary": "Failed to summarize document",
+    "key_points": [],
+    "technical_concepts": [],
+    "architectural_components": [],
+    "decisions": [],
+    "action_items": [],
+    "entities": {
+        "people": [],
+        "organizations": [],
+        "technologies": [],
+        "repositories": [],
+        "services": [],
+    },
+    "topics": [],
+    "important_relationships": [],
+    "document_type": "other",
+    "confidence": 0.0,
+    "raw_text_fallback": True,
+}
 
 
 async def summarize_document(
@@ -25,16 +88,14 @@ async def summarize_document(
     filename: str,
     model: str,
 ) -> dict[str, object]:
-    fallback: dict[str, object] = {
-        "key_points": [filename],
-        "raw_text_fallback": True,
-    }
-
     try:
         messages = [
             {
                 "role": "system",
-                "content": ("You are a document summarization assistant. Return only valid JSON."),
+                "content": (
+                    "You are a project memory extraction system. "
+                    "Return only valid JSON matching the requested schema."
+                ),
             },
             {
                 "role": "user",
@@ -50,18 +111,18 @@ async def summarize_document(
             filename=filename,
             response_type=type(parsed).__name__,
         )
-        return fallback
+        return _FALLBACK
     except LLMError as exc:
         logger.error(
             "LLM call failed during summarization, returning fallback",
             filename=filename,
             error=str(exc),
         )
-        return fallback
+        return _FALLBACK
     except json.JSONDecodeError as exc:
         logger.error(
             "Failed to parse LLM response as JSON, returning fallback",
             filename=filename,
             error=str(exc),
         )
-        return fallback
+        return _FALLBACK

@@ -42,11 +42,37 @@ async def test_llm_call_failure_raises_llm_error() -> None:
 @pytest.mark.unit
 async def test_summarize_document_valid_json_returns_parsed_dict() -> None:
     expected = {
-        "key_points": ["First point", "Second point"],
-        "decisions": ["Chose Postgres"],
-        "action_items": ["Schedule review"],
-        "people_mentioned": ["Alice"],
-        "topics": ["architecture", "database"],
+        "summary": "A technical design document describing the ingestion pipeline.",
+        "key_points": [
+            "Ingestion uses ARQ workers for async processing",
+            "Documents are chunked, embedded, and stored in Qdrant",
+            "Summaries are stored in Postgres as an event log",
+        ],
+        "technical_concepts": ["vector embeddings", "chunking", "async workers"],
+        "architectural_components": ["Qdrant", "Postgres", "ARQ"],
+        "decisions": [
+            {"decision": "Use Qdrant", "reasoning": "Self-hostable and performant"},
+        ],
+        "action_items": [
+            {"task": "Implement CAG rebuild", "owner": "Alice", "status": "open"},
+        ],
+        "entities": {
+            "people": ["Alice"],
+            "organizations": [],
+            "technologies": ["Qdrant", "Postgres", "ARQ"],
+            "repositories": [],
+            "services": [],
+        },
+        "topics": ["ingestion", "rag", "architecture"],
+        "important_relationships": [
+            {
+                "source": "IngestJob",
+                "relationship": "writes to",
+                "target": "Qdrant",
+            },
+        ],
+        "document_type": "architecture",
+        "confidence": 0.9,
     }
 
     with patch("app.ingestion.summarizer.llm_call", return_value=json.dumps(expected)):
@@ -68,7 +94,10 @@ async def test_summarize_document_invalid_json_returns_fallback() -> None:
             model="gpt-4o-mini",
         )
 
-    assert result == {"key_points": ["test.md"], "raw_text_fallback": True}
+    assert result["raw_text_fallback"] is True
+    assert result["key_points"] == []
+    assert result["document_type"] == "other"
+    assert result["confidence"] == 0.0
 
 
 @pytest.mark.unit
@@ -80,4 +109,7 @@ async def test_summarize_document_llm_error_returns_fallback() -> None:
             model="gpt-4o-mini",
         )
 
-    assert result == {"key_points": ["test.md"], "raw_text_fallback": True}
+    assert result["raw_text_fallback"] is True
+    assert result["key_points"] == []
+    assert result["document_type"] == "other"
+    assert result["confidence"] == 0.0
