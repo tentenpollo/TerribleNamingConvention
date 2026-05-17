@@ -7,6 +7,8 @@ import uuid
 from httpx import ASGITransport, AsyncClient
 import pytest
 import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.main import app
 from app.models.document import Document, FileType
@@ -36,6 +38,25 @@ def mock_user() -> User:
 # ---------------------------------------------------------------------------
 # Integration test fixtures — require real Postgres
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def override_db_engine_for_tests():
+    """Use NullPool so every session gets a fresh connection — prevents
+    asyncpg 'another operation is in progress' errors when tests share
+    the module-level AsyncSessionLocal across different event loops."""
+    from app.core import database
+    from app.core.config import settings
+
+    test_engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    original = database.AsyncSessionLocal
+    database.AsyncSessionLocal = async_sessionmaker(
+        bind=test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    yield
+    database.AsyncSessionLocal = original
 
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")

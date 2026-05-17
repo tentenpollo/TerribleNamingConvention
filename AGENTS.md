@@ -81,6 +81,76 @@ docker compose -f docker-compose.dev.yml up postgres redis qdrant -d
 
 ---
 
+## Integration Test Rules
+
+These are hard rules. Violating them causes `asyncpg.exceptions._base.InterfaceError: cannot perform operation: another operation is in progress`.
+
+### 1. Never import `AsyncSessionLocal` directly in integration tests
+
+The `conftest.py` session-scoped autouse fixture replaces `database.AsyncSessionLocal` with a `NullPool` engine. If you import it directly (`from app.core.database import AsyncSessionLocal`), you capture the original reference before the override runs.
+
+**Wrong:**
+```python
+from app.core.database import AsyncSessionLocal
+
+async def test_something():
+    async with AsyncSessionLocal() as session:  # uses original pooled engine
+```
+
+**Right:**
+```python
+from app.core import database
+
+async def test_something():
+    async with database.AsyncSessionLocal() as session:  # uses NullPool override
+```
+
+### 2. Patch `AsyncSessionLocal` in code under test
+
+When the code you're testing opens its own `AsyncSessionLocal` (e.g. the ARQ worker in `app/workers/ingest.py`), patch it to use the overridden session factory:
+
+```python
+from unittest.mock import patch
+from app.core import database
+
+with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+    await ingest_document(ctx, job_id, document_id, project_id)
+```
+
+### 3. Never use `session.refresh()` across session boundaries
+
+Objects created in one session are not persistent in another. After `ingest_document` completes (it opens and closes its own session), re-query the object:
+
+```python
+async with database.AsyncSessionLocal() as session:
+    result = await session.execute(select(IngestionJob).where(IngestionJob.id == job_id))
+    job = result.scalar_one()
+    assert job.status == "complete"
+```
+
+### 4. Use `@pytest_asyncio.fixture(loop_scope="function", scope="function")`
+
+Plain `@pytest.fixture` on async generators creates event loop mismatches. Always use `pytest_asyncio.fixture` with explicit `loop_scope="function"`.
+
+### 5. API integration tests: skip autouse dependency overrides
+
+The `test_documents.py` `override_dependencies` fixture has `autouse=True` and mocks all dependencies. Integration tests need real DB calls. Skip the overrides:
+
+```python
+@pytest.fixture(autouse=True)
+def override_dependencies(request: pytest.FixtureRequest, ...):
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+    # ... override logic ...
+```
+
+### 6. Clean up after yourself
+
+Integration tests that create data must delete it in a `finally` block. Use `delete()` with explicit `where` clauses.
+
+---
+
 ## Directory Structure
 
 ```

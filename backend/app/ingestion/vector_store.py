@@ -89,7 +89,7 @@ class VectorStore:
                 query=query_vector,
                 limit=top_k,
             )
-            return response.points
+            return response.points  # type: ignore[no-any-return]
         except QdrantError:
             raise
         except Exception as exc:

@@ -206,50 +206,55 @@ async def test_ingest_document_status_commits_in_correct_order() -> None:
 
 @pytest.mark.integration
 async def test_ingest_document_full_pipeline() -> None:
+    from unittest.mock import patch
+
     from sqlalchemy import delete
 
-    from app.core.database import AsyncSessionLocal
+    from app.core import database
     from app.core.qdrant import get_qdrant_client
     from app.ingestion.embedder import Embedder
     from app.ingestion.vector_store import VectorStore
     from app.models.project import Project
     from app.models.team import Team
 
-    async with AsyncSessionLocal() as session:
-        team = Team(name="Ingest Worker Integration Team")
-        session.add(team)
-        await session.flush()
+    with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+        async with database.AsyncSessionLocal() as session:
+            team = Team(name="Ingest Worker Integration Team")
+            session.add(team)
+            await session.flush()
 
-        project = Project(
-            name="Ingest Worker Integration Project",
-            description="Integration test project",
-            team_id=team.id,
-            config={},
-        )
-        session.add(project)
-        await session.flush()
+            project = Project(
+                name="Ingest Worker Integration Project",
+                description="Integration test project",
+                team_id=team.id,
+                config={},
+            )
+            session.add(project)
+            await session.flush()
 
-        doc = Document(
-            project_id=project.id,
-            filename="integration-test.md",
-            file_type=FileType.MARKDOWN.value,
-            raw_content="# Integration Test\n\nThis document verifies the full ingestion pipeline.",
-        )
-        session.add(doc)
-        await session.flush()
+            doc = Document(
+                project_id=project.id,
+                filename="integration-test.md",
+                file_type=FileType.MARKDOWN.value,
+                raw_content=(
+                    "# Integration Test\n\nThis document verifies the full ingestion pipeline."
+                ),
+            )
+            session.add(doc)
+            await session.flush()
 
-        job = IngestionJob(
-            project_id=project.id,
-            document_id=doc.id,
-            status=JobStatus.PENDING.value,
-        )
-        session.add(job)
-        await session.commit()
+            job = IngestionJob(
+                project_id=project.id,
+                document_id=doc.id,
+                status=JobStatus.PENDING.value,
+            )
+            session.add(job)
+            await session.commit()
 
-        project_id = project.id
-        document_id = doc.id
-        job_id = job.id
-        team_id = team.id
+            project_id = project.id
+            document_id = doc.id
+            job_id = job.id
+            team_id = team.id
 
         embedder = Embedder()
         vector_store = VectorStore(client=get_qdrant_client())
@@ -261,9 +266,15 @@ async def test_ingest_document_full_pipeline() -> None:
 
         await ingest_document(ctx, job_id, document_id, project_id)
 
-        await session.refresh(job)
-        assert job.status == JobStatus.COMPLETE.value
-        assert job.completed_at is not None
+        async with database.AsyncSessionLocal() as session:
+            from sqlalchemy import select as sa_select
+
+            result = await session.execute(
+                sa_select(IngestionJob).where(IngestionJob.id == job_id),
+            )
+            refreshed_job = result.scalar_one()
+            assert refreshed_job.status == JobStatus.COMPLETE.value
+            assert refreshed_job.completed_at is not None
 
     vector_store = VectorStore(client=get_qdrant_client())
     hits = await vector_store.search(project_id, query_vector=[0.0] * 384, top_k=10)
@@ -276,6 +287,6 @@ async def test_ingest_document_full_pipeline() -> None:
 
     await vector_store.delete_collection(project_id)
 
-    async with AsyncSessionLocal() as session:
+    async with database.AsyncSessionLocal() as session:
         await session.execute(delete(Team).where(Team.id == team_id))
         await session.commit()

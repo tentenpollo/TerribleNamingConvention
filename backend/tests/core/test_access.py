@@ -4,11 +4,12 @@ from collections.abc import AsyncGenerator
 import uuid
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import database
 from app.core.access import get_accessible_project_ids
-from app.core.database import AsyncSessionLocal, engine
 from app.core.roles import Role
 from app.models.project import Project
 from app.models.team import Team, TeamMember
@@ -17,9 +18,9 @@ from app.models.user import User
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="function", scope="function")
 async def session() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as db_session:
+    async with database.AsyncSessionLocal() as db_session:
         # Truncate all tables in one statement — CASCADE handles FK ordering
         await db_session.execute(
             text(
@@ -30,8 +31,6 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
         )
         await db_session.commit()
         yield db_session
-        await db_session.rollback()
-    await engine.dispose()
 
 
 async def test_member_with_one_team_assigned_to_one_project_returns_only_that_project(

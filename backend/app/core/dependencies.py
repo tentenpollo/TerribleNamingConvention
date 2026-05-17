@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import cast
 import uuid
 
-from fastapi import Depends, Header, HTTPException, status
+from arq.connections import ArqRedis
+from fastapi import Depends, Header, HTTPException, Request, status
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,7 @@ from app.ingestion.embedder import get_embedder as _get_embedder
 from app.ingestion.vector_store import VectorStore
 from app.models.user import User
 from app.services.auth import AuthService
+from app.services.document import DocumentService
 from app.services.project import ProjectService
 from app.services.team import TeamService
 
@@ -118,3 +121,14 @@ def get_vector_store() -> VectorStore:
 
 def get_embedder() -> Embedder:
     return _get_embedder()
+
+
+def get_arq_pool(request: Request) -> ArqRedis:
+    return cast(ArqRedis, request.app.state.arq_pool)
+
+
+async def get_document_service(
+    session: AsyncSession = Depends(get_async_session),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+) -> DocumentService:
+    return DocumentService(session, arq_pool)
