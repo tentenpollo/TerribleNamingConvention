@@ -113,3 +113,18 @@ async def test_summarize_document_llm_error_returns_fallback() -> None:
     assert result["key_points"] == []
     assert result["document_type"] == "other"
     assert result["confidence"] == 0.0
+
+
+@pytest.mark.unit
+async def test_summarize_document_non_dict_json_returns_fallback() -> None:
+    with patch("app.ingestion.summarizer.llm_call", return_value='["not", "a", "dict"]'):
+        result = await summarize_document(
+            text="Some document content",
+            filename="test.md",
+            model="gpt-4o-mini",
+        )
+
+    assert result["raw_text_fallback"] is True
+    assert result["key_points"] == []
+    assert result["document_type"] == "other"
+    assert result["confidence"] == 0.0

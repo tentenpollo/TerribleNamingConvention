@@ -62,6 +62,30 @@ services:
       qdrant:
         condition: service_healthy
 
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    volumes:
+      - ./backend:/app/backend
+      - ./pyproject.toml:/app/pyproject.toml
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/projectdb
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - JWT_SECRET=${JWT_SECRET:-change-me}
+      - APP_ENV=development
+      - LITELLM_CONTEXT_MODEL=${LITELLM_CONTEXT_MODEL:-gpt-4o-mini}
+    command: arq app.workers.settings.WorkerSettings
+    working_dir: /app/backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
   frontend:
     build:
       context: .
