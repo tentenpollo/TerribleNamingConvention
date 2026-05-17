@@ -10,7 +10,16 @@ from app.ingestion.chunker import Chunk
 from app.ingestion.embedder import EmbeddingResult
 from app.models.document import Document, FileType
 from app.models.ingestion_job import IngestionJob, JobStatus
+from app.models.project import Project
 from app.workers.ingest import ingest_document
+
+_SUMMARY_MOCK_RETURN = {
+    "key_points": ["test summary"],
+    "decisions": [],
+    "action_items": [],
+    "people_mentioned": [],
+    "topics": ["test"],
+}
 
 
 def _make_mock_job(status: str = JobStatus.PENDING.value) -> IngestionJob:
@@ -20,6 +29,13 @@ def _make_mock_job(status: str = JobStatus.PENDING.value) -> IngestionJob:
     job.error_message = None
     job.completed_at = None
     return job
+
+
+def _make_mock_project() -> Project:
+    project = MagicMock(spec=Project)
+    project.id = uuid.uuid4()
+    project.config = {}
+    return project
 
 
 def _make_mock_document() -> Document:
@@ -35,6 +51,7 @@ def _make_mock_document() -> Document:
 def _make_mock_session(
     job: IngestionJob | None = None,
     doc: Document | None = None,
+    project: Project | None = None,
     commit_calls: list | None = None,
 ) -> AsyncMock:
     session = AsyncMock()
@@ -53,6 +70,14 @@ def _make_mock_session(
         if entity is Document and doc is not None:
             mock_result = MagicMock()
             mock_result.scalar_one_or_none = lambda: doc
+            return mock_result
+        if entity is Project and project is not None:
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none = lambda: project
+            return mock_result
+        if entity is None:
+            mock_result = MagicMock()
+            mock_result.scalar = lambda: 1
             return mock_result
         mock_result = MagicMock()
         mock_result.scalar_one_or_none = lambda: None
@@ -80,8 +105,9 @@ def _make_mock_vector_store() -> AsyncMock:
 async def test_ingest_document_happy_path_sets_complete() -> None:
     job = _make_mock_job()
     doc = _make_mock_document()
+    project = _make_mock_project()
     commit_calls: list[str] = []
-    session = _make_mock_session(job=job, doc=doc, commit_calls=commit_calls)
+    session = _make_mock_session(job=job, doc=doc, project=project, commit_calls=commit_calls)
     embedder = _make_mock_embedder()
     vector_store = _make_mock_vector_store()
 
@@ -95,8 +121,9 @@ async def test_ingest_document_happy_path_sets_complete() -> None:
     project_id = doc.project_id
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
-        async with session:
-            await ingest_document(ctx, job_id, document_id, project_id)
+        with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
+            async with session:
+                await ingest_document(ctx, job_id, document_id, project_id)
 
     assert job.status == JobStatus.COMPLETE.value
     assert job.completed_at is not None
@@ -110,8 +137,9 @@ async def test_ingest_document_parse_failure_sets_failed() -> None:
     job = _make_mock_job()
     doc = _make_mock_document()
     doc.file_type = "csv"
+    project = _make_mock_project()
     commit_calls: list[str] = []
-    session = _make_mock_session(job=job, doc=doc, commit_calls=commit_calls)
+    session = _make_mock_session(job=job, doc=doc, project=project, commit_calls=commit_calls)
     embedder = _make_mock_embedder()
     vector_store = _make_mock_vector_store()
 
@@ -138,8 +166,9 @@ async def test_ingest_document_parse_failure_sets_failed() -> None:
 async def test_ingest_document_qdrant_upsert_failure_sets_failed() -> None:
     job = _make_mock_job()
     doc = _make_mock_document()
+    project = _make_mock_project()
     commit_calls: list[str] = []
-    session = _make_mock_session(job=job, doc=doc, commit_calls=commit_calls)
+    session = _make_mock_session(job=job, doc=doc, project=project, commit_calls=commit_calls)
     embedder = _make_mock_embedder()
     vector_store = _make_mock_vector_store()
     vector_store.upsert.side_effect = QdrantError("Qdrant connection refused")
@@ -167,6 +196,7 @@ async def test_ingest_document_qdrant_upsert_failure_sets_failed() -> None:
 async def test_ingest_document_status_commits_in_correct_order() -> None:
     job = _make_mock_job()
     doc = _make_mock_document()
+    project = _make_mock_project()
     statuses_after_each_commit: list[str | None] = []
     commit_calls: list[str] = []
 
@@ -174,7 +204,7 @@ async def test_ingest_document_status_commits_in_correct_order() -> None:
         statuses_after_each_commit.append(job.status)
         commit_calls.append("commit")
 
-    session = _make_mock_session(job=job, doc=doc, commit_calls=commit_calls)
+    session = _make_mock_session(job=job, doc=doc, project=project, commit_calls=commit_calls)
     session.commit = tracking_commit
     embedder = _make_mock_embedder()
     vector_store = _make_mock_vector_store()
@@ -189,8 +219,9 @@ async def test_ingest_document_status_commits_in_correct_order() -> None:
     project_id = doc.project_id
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
-        async with session:
-            await ingest_document(ctx, job_id, document_id, project_id)
+        with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
+            async with session:
+                await ingest_document(ctx, job_id, document_id, project_id)
 
     assert JobStatus.RUNNING.value in statuses_after_each_commit
     assert JobStatus.COMPLETE.value in statuses_after_each_commit
@@ -214,57 +245,62 @@ async def test_ingest_document_full_pipeline() -> None:
     from app.core.qdrant import get_qdrant_client
     from app.ingestion.embedder import Embedder
     from app.ingestion.vector_store import VectorStore
+    from app.models.document_summary import DocumentSummary
     from app.models.project import Project
     from app.models.team import Team
 
     with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
-        async with database.AsyncSessionLocal() as session:
-            team = Team(name="Ingest Worker Integration Team")
-            session.add(team)
-            await session.flush()
+        with patch(
+            "app.workers.ingest.summarize_document",
+            return_value={"key_points": ["test"], "raw_text_fallback": False},
+        ):
+            async with database.AsyncSessionLocal() as session:
+                team = Team(name="Ingest Worker Integration Team")
+                session.add(team)
+                await session.flush()
 
-            project = Project(
-                name="Ingest Worker Integration Project",
-                description="Integration test project",
-                team_id=team.id,
-                config={},
-            )
-            session.add(project)
-            await session.flush()
+                project = Project(
+                    name="Ingest Worker Integration Project",
+                    description="Integration test project",
+                    team_id=team.id,
+                    config={},
+                )
+                session.add(project)
+                await session.flush()
 
-            doc = Document(
-                project_id=project.id,
-                filename="integration-test.md",
-                file_type=FileType.MARKDOWN.value,
-                raw_content=(
-                    "# Integration Test\n\nThis document verifies the full ingestion pipeline."
-                ),
-            )
-            session.add(doc)
-            await session.flush()
+                doc = Document(
+                    project_id=project.id,
+                    filename="integration-test.md",
+                    file_type=FileType.MARKDOWN.value,
+                    raw_content=(
+                        "# Integration Test\n\nThis document verifies the full ingestion pipeline."
+                    ),
+                )
+                session.add(doc)
+                await session.flush()
 
-            job = IngestionJob(
-                project_id=project.id,
-                document_id=doc.id,
-                status=JobStatus.PENDING.value,
-            )
-            session.add(job)
-            await session.commit()
+                job = IngestionJob(
+                    project_id=project.id,
+                    document_id=doc.id,
+                    status=JobStatus.PENDING.value,
+                )
+                session.add(job)
+                await session.commit()
 
-            project_id = project.id
-            document_id = doc.id
-            job_id = job.id
-            team_id = team.id
+                project_id = project.id
+                document_id = doc.id
+                job_id = job.id
+                team_id = team.id
 
-        embedder = Embedder()
-        vector_store = VectorStore(client=get_qdrant_client())
+            embedder = Embedder()
+            vector_store = VectorStore(client=get_qdrant_client())
 
-        ctx: dict[str, object] = {
-            "embedder": embedder,
-            "vector_store": vector_store,
-        }
+            ctx: dict[str, object] = {
+                "embedder": embedder,
+                "vector_store": vector_store,
+            }
 
-        await ingest_document(ctx, job_id, document_id, project_id)
+            await ingest_document(ctx, job_id, document_id, project_id)
 
         async with database.AsyncSessionLocal() as session:
             from sqlalchemy import select as sa_select
@@ -275,6 +311,13 @@ async def test_ingest_document_full_pipeline() -> None:
             refreshed_job = result.scalar_one()
             assert refreshed_job.status == JobStatus.COMPLETE.value
             assert refreshed_job.completed_at is not None
+
+            summary_result = await session.execute(
+                sa_select(DocumentSummary).where(DocumentSummary.document_id == document_id),
+            )
+            summary = summary_result.scalar_one()
+            assert summary.summary
+            assert isinstance(summary.summary, dict)
 
     vector_store = VectorStore(client=get_qdrant_client())
     hits = await vector_store.search(project_id, query_vector=[0.0] * 384, top_k=10)
@@ -288,5 +331,11 @@ async def test_ingest_document_full_pipeline() -> None:
     await vector_store.delete_collection(project_id)
 
     async with database.AsyncSessionLocal() as session:
+        await session.execute(delete(IngestionJob).where(IngestionJob.project_id == project_id))
+        await session.execute(
+            delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+        )
+        await session.execute(delete(Document).where(Document.project_id == project_id))
+        await session.execute(delete(Project).where(Project.id == project_id))
         await session.execute(delete(Team).where(Team.id == team_id))
         await session.commit()

@@ -55,3 +55,7 @@ class UnsupportedFileTypeError(AppError):
 
 class QdrantError(AppError):
     """Raised when a Qdrant operation fails unexpectedly."""
+
+
+class LLMError(AppError):
+    """Raised when an LLM call fails unexpectedly."""
