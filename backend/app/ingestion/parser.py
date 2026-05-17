@@ -8,7 +8,7 @@ from app.core.exceptions import UnsupportedFileTypeError
 from app.models.document import FileType
 
 
-def parse_file(content: bytes, file_type: FileType) -> str:
+def parse_file(content: bytes, file_type: FileType | str) -> str:
     """Extract plain text from raw file bytes.
 
     Args:
