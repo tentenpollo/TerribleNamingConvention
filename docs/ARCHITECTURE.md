@@ -72,12 +72,12 @@ The core of the project. Owns:
 
 ### Ingestion Pipeline (`/backend/app/ingestion/`)
 Owns the pipeline from raw file to stored embeddings:
-- File parsing (markdown, txt, PDF)
-- Chunking strategies (naive, contextual, late)
-- Contextual annotation via LLM (cheap model)
-- Embedding via FastEmbed
-- Qdrant upsert
-- Summary generation and storage in Postgres event log
+- File parsing (markdown, txt, PDF via PyMuPDF)
+- Chunking strategies (naive implemented, contextual/late stubbed)
+- Embedding via FastEmbed (local, no API key)
+- Qdrant upsert with per-project collection isolation
+- Summary generation via LLM (structured JSON, never raises)
+- Document summaries stored as immutable event log in Postgres
 
 ### CAG Layer (`/backend/app/services/cag.py`)
 Owns belief state lifecycle:
@@ -97,41 +97,45 @@ User uploads file
 POST /projects/{id}/documents
        │
        ▼
-IngestService.queue_ingestion_job()
-  → validates file type and size
+DocumentService.upload()
+  → validates file type (.md, .txt, .pdf) and size
   → stores raw document in Postgres (documents table)
-  → queues ARQ IngestJob
-  → returns job_id immediately
+  → creates IngestionJob (status: pending)
+  → queues ARQ job via arq_pool.enqueue_job()
+  → returns 202 with job_id
        │
-       ▼ (async, in ARQ worker)
-IngestJob.run()
+       ▼ (async, in ARQ worker process)
+ingest_document(ctx, job_id, document_id, project_id)
   │
-  ├─ parse_file() → raw text
+  ├─ status → RUNNING (commit)
   │
-  ├─ chunk() → chunks[]
-  │    strategy: naive | contextual | late
-  │    (from project config)
+  ├─ parse_file(content, file_type) → raw text
+  │    markdown: direct, txt: UTF-8 decode, PDF: PyMuPDF
   │
-  ├─ if contextual:
-  │    for each chunk:
-  │      LiteLLM call (cheap context model)
-  │      → prepend project-aware context to chunk
+  ├─ chunk_text(text, strategy=naive, size=512, overlap=64) → chunks[]
+  │    (contextual and late strategies stubbed)
   │
-  ├─ embed(chunks) → vectors[]
-  │    FastEmbed, local, no API call
+  ├─ embedder.embed(chunks) → EmbeddingResult[]
+  │    FastEmbed, local model, lru_cache singleton
   │
-  ├─ qdrant_upsert(project_collection, vectors)
-  │    collection name: "project_{project_id}"
+  ├─ vector_store.upsert(project_id, results, document_id)
+  │    collection: "project_{project_id}"
+  │    payload: document_id, project_id, chunk_index, text, filename, created_at
   │
-  ├─ generate_summary(raw_text)
-  │    LiteLLM call → structured summary
-  │    stored in document_summaries (immutable)
+  ├─ summarize_document(text, filename, model) → dict
+  │    LiteLLM call → structured JSON summary
+  │    never raises — returns fallback on LLM failure or invalid JSON
+  │    stored in document_summaries (immutable event log)
   │
-  ├─ update ingestion_job status → COMPLETE
+  ├─ check CAG rebuild threshold
+  │    if doc_count % threshold == 0:
+  │      log (rebuild job not yet implemented)
   │
-  └─ check_cag_rebuild_threshold(project_id)
-       if doc_count % threshold == 0:
-         queue CAGUpdateJob
+  ├─ status → COMPLETE, completed_at = now (commit)
+  │
+  └─ on any exception:
+       status → FAILED, error_message = str(exc) (commit)
+       re-raise for ARQ retry
 ```
 
 ---

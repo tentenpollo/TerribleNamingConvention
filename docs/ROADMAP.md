@@ -65,23 +65,23 @@
 
 | Task | Status |
 |---|---|
-| Document upload endpoint POST /projects/{id}/documents | ⬜ |
-| File parsing — markdown, txt, PDF (via pymupdf) | ⬜ |
-| Naive chunking strategy | ⬜ |
+| Document upload endpoint POST /projects/{id}/documents | ✅ |
+| File parsing — markdown, txt, PDF (via pymupdf) | ✅ |
+| Naive chunking strategy | ✅ |
 | Contextual chunking strategy (LLM annotation per chunk) | ⬜ |
 | Late chunking strategy | ⬜ |
-| Per-project ingestion config (chunking_strategy, context_model, query_model, cag_rebuild_threshold) | ⬜ |
-| FastEmbed embedding | ⬜ |
-| Qdrant upsert — collection per project (project_{id}) | ⬜ |
-| ARQ IngestJob — full async pipeline | ⬜ |
-| Raw document stored in Postgres (documents table) | ⬜ |
-| Per-document summary stored in Postgres (document_summaries table — immutable) | ⬜ |
-| Ingestion job status endpoint GET /jobs/{id} | ⬜ |
-| Tests: upload creates job, job completes, chunks in Qdrant | ⬜ |
-| Tests: summaries stored in Postgres | ⬜ |
-| Tests: two projects have isolated Qdrant collections | ⬜ |
+| Per-project ingestion config (chunking_strategy, context_model, query_model, cag_rebuild_threshold) | ✅ |
+| FastEmbed embedding | ✅ |
+| Qdrant upsert — collection per project (project_{id}) | ✅ |
+| ARQ IngestJob — full async pipeline | ✅ |
+| Raw document stored in Postgres (documents table) | ✅ |
+| Per-document summary stored in Postgres (document_summaries table — immutable) | ✅ |
+| Ingestion job status endpoint GET /jobs/{id} | ✅ |
+| Tests: upload creates job, job completes, chunks in Qdrant | ✅ |
+| Tests: summaries stored in Postgres | ✅ |
+| Tests: two projects have isolated Qdrant collections | ✅ |
 
-**Done when:** Two projects each have documents ingested into fully isolated Qdrant collections.
+**Done when:** Two projects each have documents ingested into fully isolated Qdrant collections. ✅
 
 ---
 

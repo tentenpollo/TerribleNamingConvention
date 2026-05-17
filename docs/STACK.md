@@ -155,9 +155,41 @@ SSO / OAuth is v2 scope. The auth module is designed to be swappable — the RBA
 - Fixture system is excellent for setting up DB state, auth tokens, projects
 
 **Test strategy:**
-- Unit tests for services and retrieval logic (fast, no external dependencies, use mocks for LLM and Qdrant)
-- Integration tests for API endpoints (use real Postgres and Qdrant via Docker in CI)
+- Unit tests for services, ingestion modules, and worker logic (fast, no external dependencies, use mocks for LLM and Qdrant)
+- Integration tests for API endpoints and full pipeline (use real Postgres, Redis, and Qdrant via Docker in CI)
 - E2E tests for critical flows (Playwright on frontend in CI)
+
+**Integration test rules (see AGENTS.md):**
+- Never import `AsyncSessionLocal` directly — always use `from app.core import database` then `database.AsyncSessionLocal`
+- Patch `AsyncSessionLocal` in code under test when it opens its own sessions (e.g. ARQ worker)
+- Never use `session.refresh()` across session boundaries — re-query instead
+- Use `@pytest_asyncio.fixture(loop_scope="function", scope="function")` — plain `@pytest.fixture` on async generators creates event loop mismatches
+- Clean up after yourself with `delete()` and explicit `where` clauses in `finally` blocks
+
+---
+
+## PDF Parsing — PyMuPDF
+
+**Why PyMuPDF:**
+- Fast, pure text extraction from PDF files
+- Well-maintained, widely used, simple API
+- Returns clean text that feeds directly into the chunker
+
+**Considered and rejected:**
+- pdfplumber — slower, more complex API, overkill for plain text extraction
+- PyPDF2 — weaker text extraction quality, especially for complex layouts
+- pdfminer.six — slow, verbose API, PyMuPDF is significantly faster
+
+---
+
+## Document Summarization — LiteLLM + Structured JSON
+
+**Why structured JSON summaries:**
+- Each document produces a machine-readable summary stored in Postgres as an immutable event log
+- Summaries feed the CAG belief state — they are the raw material for project understanding
+- Schema includes: summary, key_points, technical_concepts, architectural_components, decisions, action_items, entities, topics, important_relationships, document_type, confidence
+- Never raises — returns a fallback dict with `raw_text_fallback: true` on LLM failure or invalid JSON
+- This ensures ingestion jobs always complete even when the LLM is unavailable
 
 ---
 

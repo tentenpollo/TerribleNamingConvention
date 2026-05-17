@@ -25,6 +25,8 @@ Access is team-scoped. Members only see their projects. Admins see everything. E
 - **Pluggable LLM backend** — OpenAI, Anthropic, local Ollama, anything LiteLLM supports
 - **Self-hostable** — one command, Docker Compose, no external dependencies required
 - **Immutable event log** — belief states are derived artifacts; raw data is never mutated
+- **Async ingestion via ARQ** — file upload returns immediately, background worker processes parse → chunk → embed → store
+- **Structured document summaries** — each document produces a machine-readable JSON summary for the CAG belief state
 
 ---
 
@@ -49,11 +51,12 @@ API docs at `http://localhost:8000/docs`.
 
 ### First Steps
 
-1. Register a super admin account at `/register`
+1. Register an account at `/register` (first user will need admin role — promote via DB or use dev endpoint)
 2. Create a team and invite members
 3. Create a project and assign it to the team
-4. Upload documents (markdown, txt, PDF)
-5. Query your project
+4. Upload documents via `POST /projects/{id}/documents` (markdown, txt, PDF supported)
+5. Poll `GET /jobs/{id}` to track ingestion status
+6. Query your project (coming in Phase 4)
 
 ---
 
@@ -100,6 +103,7 @@ pyproject.toml
 | [STACK.md](/docs/STACK.md) | Stack decisions with rationale |
 | [RULES.md](/docs/RULES.md) | Coding conventions and patterns |
 | [ROADMAP.md](/docs/ROADMAP.md) | Phase plan and v2 backlog |
+| [PHASE-2-SUMMARY.md](/docs/PHASE-2-SUMMARY.md) | Phase 2 implementation summary |
 
 ---
 
