@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     litellm_query_model: str = "gpt-4o-mini"
     litellm_context_model: str = "gpt-4o-mini"
     default_chunking_strategy: str = "contextual"
+    default_chunk_size: int = 512
+    default_chunk_overlap: int = 64
     default_cag_rebuild_threshold: int = 50
     max_upload_size_mb: int = 50
     arq_max_jobs: int = 10

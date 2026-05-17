@@ -242,6 +242,39 @@ async def test_ingest_document_status_commits_in_correct_order() -> None:
     assert running_index < complete_index
 
 
+@pytest.mark.unit
+async def test_ingest_document_uses_project_chunk_config() -> None:
+    job = _make_mock_job()
+    doc = _make_mock_document()
+    project = _make_mock_project()
+    project.config = {"chunk_size": 256, "chunk_overlap": 32}
+    commit_calls: list[str] = []
+    session = _make_mock_session(job=job, doc=doc, project=project, commit_calls=commit_calls)
+    embedder = _make_mock_embedder()
+    vector_store = _make_mock_vector_store()
+
+    ctx: dict[str, object] = {
+        "embedder": embedder,
+        "vector_store": vector_store,
+    }
+
+    job_id = uuid.uuid4()
+    document_id = doc.id
+    project_id = doc.project_id
+
+    with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
+        with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
+            with patch("app.workers.ingest.chunk_text") as chunk_text_mock:
+                chunk_text_mock.return_value = [
+                    Chunk(text="hello", index=0, metadata={"filename": "test.md"}),
+                ]
+                async with session:
+                    await ingest_document(ctx, job_id, document_id, project_id)
+
+    assert chunk_text_mock.call_args.kwargs["chunk_size"] == 256
+    assert chunk_text_mock.call_args.kwargs["overlap"] == 32
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — require real Postgres, Redis, Qdrant
 # ---------------------------------------------------------------------------

@@ -37,17 +37,21 @@ async def ingest_document(
             await session.commit()
 
             doc = await _fetch_document(session, document_id)
+            project = await _fetch_project(session, project_id)
 
             parsed_text = parse_file(
                 content=doc.raw_content.encode(),
                 file_type=doc.file_type,
             )
 
+            chunk_size = project.config.get("chunk_size", settings.default_chunk_size)
+            chunk_overlap = project.config.get("chunk_overlap", settings.default_chunk_overlap)
+            # TODO: read from project.config when contextual/late are implemented
             chunks = chunk_text(
                 text=parsed_text,
                 strategy=ChunkingStrategy.NAIVE,
-                chunk_size=512,
-                overlap=64,
+                chunk_size=chunk_size,
+                overlap=chunk_overlap,
             )
             for chunk in chunks:
                 chunk.metadata["filename"] = doc.filename
@@ -56,7 +60,6 @@ async def ingest_document(
 
             await vector_store.upsert(project_id, embedding_results, document_id)
 
-            project = await _fetch_project(session, project_id)
             context_model = project.config.get("context_model", settings.litellm_context_model)
             summary_dict = await summarize_document(
                 text=parsed_text,

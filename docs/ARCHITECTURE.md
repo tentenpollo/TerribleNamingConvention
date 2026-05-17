@@ -109,10 +109,13 @@ ingest_document(ctx, job_id, document_id, project_id)
   │
   ├─ status → RUNNING (commit)
   │
+  ├─ fetch project (for config: chunking, model, threshold)
+  │
   ├─ parse_file(content, file_type) → raw text
   │    markdown: direct, txt: UTF-8 decode, PDF: PyMuPDF
   │
-  ├─ chunk_text(text, strategy=naive, size=512, overlap=64) → chunks[]
+  ├─ chunk_text(text, strategy=naive, size=project.config["chunk_size"], overlap=project.config["chunk_overlap"]) → chunks[]
+  │    chunk_size and chunk_overlap read from project.config, fallback to settings defaults
   │    (contextual and late strategies stubbed)
   │
   ├─ embedder.embed(chunks) → EmbeddingResult[]
