@@ -51,10 +51,10 @@ API docs at `http://localhost:8000/docs`.
 
 ### First Steps
 
-1. Register an account at `/register` (first user will need admin role — promote via DB or use dev endpoint)
+1. Register an account via POST /auth/register (first user must be promoted to admin directly in the database: UPDATE users SET role = 'admin' WHERE email = '...';)
 2. Create a team and invite members
 3. Create a project and assign it to the team
-4. Upload documents via `POST /projects/{id}/documents` (markdown, txt, PDF supported)
+4. Upload documents via POST /projects/{id}/documents (markdown and txt supported; PDF upload is currently broken — see ROADMAP Phase 3.0)
 5. Poll `GET /jobs/{id}` to track ingestion status
 6. Query your project (coming in Phase 4)
 
@@ -109,7 +109,7 @@ pyproject.toml
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](/docs/CONTRIBUTING.md). The short version: open an issue before starting significant work, keep PRs focused, tests are required.
+CONTRIBUTING.md is coming in Phase 6. For now: open an issue before starting significant work, keep PRs focused, tests are required.
 
 ---
 
