@@ -83,7 +83,8 @@ Owns the pipeline from raw file to stored embeddings:
 Owns belief state lifecycle:
 - Incremental update (rolling window synthesis)
 - Full rebuild (Map-Reduce over event log)
-- Threshold checking (trigger rebuild at N docs)
+- Threshold check: count of summaries with created_at > latest_state.last_summary_created_at >= threshold. (Modulo-on-total-count races under concurrent workers — triggers can be skipped or double-fired.)
+CAGUpdateJob writes are serialized per project via pg_advisory_xact_lock keyed on project_id, and enqueued with a fixed ARQ job ID (cag-update-{project_id}) so concurrent threshold crossings collapse into one job.
 - Versioned belief state storage
 
 ---
@@ -323,7 +324,10 @@ CREATE TABLE belief_states (
   version INTEGER NOT NULL,
   state JSONB NOT NULL,
   rebuild_type TEXT NOT NULL,  -- incremental | full
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  last_summary_created_at TIMESTAMPTZ NOT NULL,  -- watermark: latest summary covered by this state
+  summary_count_covered INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, version)  -- backstop against concurrent versioned writes
 );
 
 -- Ingestion jobs
@@ -357,7 +361,7 @@ Chunks stored with payload:
   "created_at": "ISO8601"
 }
 ```
-
+Collections are created with a named dense vector (384, cosine) and sparse_vectors_config declared at creation — Qdrant cannot add sparse vectors to an existing collection, and Phase 4 hybrid retrieval requires them.
 ---
 
 ## Access Control Architecture
