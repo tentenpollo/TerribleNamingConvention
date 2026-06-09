@@ -170,3 +170,10 @@ Added `worker` service to `docker-compose.dev.yml`:
 - Late chunking strategy — stubbed, not implemented
 - CAG rebuild job — threshold check logs but rebuild not yet implemented
 - Belief states table — schema defined in architecture but not yet migrated
+- ---
+
+## Known Defects (discovered post-phase, June 2026)
+
+- **PDF upload broken in practice** — `DocumentService.upload()` UTF-8 decodes raw bytes before storage; real binary PDFs fail at upload. Parser unit tests pass because they call `parse_file` directly with bytes. Fix tracked in ROADMAP Phase 3.0.
+- **Ingestion is not idempotent under ARQ retry** — random Qdrant point IDs and no uniqueness constraint on document_summaries mean a retried job duplicates vectors and event-log rows. Fix tracked in Phase 3.0.
+- **Qdrant collections created in Phase 2 are dense-only** — incompatible with Phase 4 hybrid (sparse must be declared at collection creation). Collections need schema v2 + re-index. Fix tracked in Phase 3.0.
