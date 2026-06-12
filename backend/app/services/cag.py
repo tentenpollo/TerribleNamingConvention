@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+import uuid
+
+from pydantic import ValidationError
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.exceptions import (
+    BeliefStateNotFoundError,
+    BeliefStateVersionConflictError,
+    InvalidBeliefStateError,
+)
+from app.models.belief_state import BeliefState
+from app.models.document_summary import DocumentSummary
+from app.schemas.belief_state import BeliefStateContent, BeliefStateRecord, BeliefStateVersionMeta
+
+
+class CAGService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_latest(self, project_id: uuid.UUID) -> BeliefStateRecord | None:
+        result = await self.session.execute(
+            select(BeliefState)
+            .where(BeliefState.project_id == project_id)
+            .order_by(BeliefState.version.desc())
+            .limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        return _to_record(row)
+
+    async def list_versions(self, project_id: uuid.UUID) -> list[BeliefStateVersionMeta]:
+        result = await self.session.execute(
+            select(
+                BeliefState.version,
+                BeliefState.rebuild_type,
+                BeliefState.created_at,
+                BeliefState.summary_count_covered,
+            )
+            .where(BeliefState.project_id == project_id)
+            .order_by(BeliefState.version.desc())
+        )
+        return [BeliefStateVersionMeta.model_validate(row._mapping) for row in result.all()]
+
+    async def get_version(self, project_id: uuid.UUID, version: int) -> BeliefStateRecord:
+        result = await self.session.execute(
+            select(BeliefState).where(
+                BeliefState.project_id == project_id, BeliefState.version == version
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise BeliefStateNotFoundError(
+                f"Belief state version {version} not found for project {project_id}"
+            )
+        return _to_record(row)
+
+    async def get_window_since(
+        self,
+        project_id: uuid.UUID,
+        watermark: datetime | None,
+    ) -> list[DocumentSummary]:
+        # Exclude rows where summary->>'raw_text_fallback' is the JSON boolean true.
+        # Rows that lack the key must be INCLUDED — COALESCE handles that.
+        not_fallback = func.coalesce(
+            DocumentSummary.summary["raw_text_fallback"].as_boolean(),
+            False,
+        ).is_(False)
+
+        stmt = (
+            select(DocumentSummary)
+            .where(DocumentSummary.project_id == project_id)
+            .where(not_fallback)
+            .order_by(DocumentSummary.created_at.asc())
+        )
+        if watermark is not None:
+            stmt = stmt.where(DocumentSummary.created_at > watermark)
+
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def insert_version(
+        self,
+        project_id: uuid.UUID,
+        content: BeliefStateContent,
+        rebuild_type: Literal["incremental", "full"],
+        last_summary_created_at: datetime,
+        summary_count_covered: int,
+    ) -> BeliefStateRecord:
+        if not isinstance(content, BeliefStateContent):
+            raise TypeError("content must be a BeliefStateContent instance")
+
+        try:
+            async with self.session.begin():
+                await self.session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                    {"k": f"cag:{project_id}"},
+                )
+
+                max_version_result = await self.session.execute(
+                    select(func.max(BeliefState.version)).where(
+                        BeliefState.project_id == project_id
+                    )
+                )
+                current_max = max_version_result.scalar_one_or_none()
+                next_version = (current_max or 0) + 1
+
+                row = BeliefState(
+                    project_id=project_id,
+                    version=next_version,
+                    state=content.model_dump(),
+                    rebuild_type=rebuild_type,
+                    last_summary_created_at=last_summary_created_at,
+                    summary_count_covered=summary_count_covered,
+                )
+                self.session.add(row)
+        except IntegrityError as exc:
+            if "uq_belief_states_project_version" in str(exc.orig):
+                raise BeliefStateVersionConflictError(
+                    f"Version conflict writing belief state for project {project_id}"
+                ) from exc
+            raise
+
+        await self.session.refresh(row)
+        return _to_record(row)
+
+
+def _to_record(row: BeliefState) -> BeliefStateRecord:
+    try:
+        return BeliefStateRecord.model_validate(row)
+    except ValidationError as exc:
+        raise InvalidBeliefStateError(
+            f"Stored belief state for project {row.project_id} version {row.version} "
+            f"failed schema validation: {exc}"
+        ) from exc

@@ -19,6 +19,7 @@ from app.ingestion.embedder import get_embedder as _get_embedder
 from app.ingestion.vector_store import VectorStore
 from app.models.user import User
 from app.services.auth import AuthService
+from app.services.cag import CAGService
 from app.services.document import DocumentService
 from app.services.project import ProjectService
 from app.services.team import TeamService
@@ -133,3 +134,9 @@ async def get_document_service(
     arq_pool: ArqRedis = Depends(get_arq_pool),
 ) -> DocumentService:
     return DocumentService(session, arq_pool)
+
+
+async def get_cag_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> CAGService:
+    return CAGService(session)

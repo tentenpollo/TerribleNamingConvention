@@ -59,3 +59,15 @@ class QdrantError(AppError):
 
 class LLMError(AppError):
     """Raised when an LLM call fails unexpectedly."""
+
+
+class BeliefStateNotFoundError(AppError):
+    """Raised when a requested belief state cannot be found."""
+
+
+class InvalidBeliefStateError(AppError):
+    """Raised when a stored belief state fails schema validation."""
+
+
+class BeliefStateVersionConflictError(AppError):
+    """Raised when a concurrent write violates the unique version constraint."""
