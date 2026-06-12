@@ -5,15 +5,23 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AccessDeniedError, ProjectNotFoundError, TeamNotFoundError
+from app.core.exceptions import (
+    AccessDeniedError,
+    ProjectNotFoundError,
+    QdrantError,
+    TeamNotFoundError,
+)
+from app.core.logging import logger
+from app.ingestion.vector_store import VectorStore
 from app.models.project import Project
 from app.models.team import Team
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
 
 class ProjectService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, vector_store: VectorStore) -> None:
         self.session = session
+        self.vector_store = vector_store
 
     async def create(self, data: ProjectCreate) -> Project:
         team = await self.session.get(Team, data.team_id)
@@ -30,6 +38,22 @@ class ProjectService:
         await self.session.commit()
         await self.session.refresh(project)
         return project
+
+    async def delete(self, project_id: UUID, accessible_ids: list[UUID]) -> None:
+        project = await self.get_by_id(project_id, accessible_ids)
+        await self.session.delete(project)
+        await self.session.commit()
+
+        # A concurrent ingest job can recreate this collection after deletion; v1 accepts
+        # that race and lets the worker fail when it observes the missing project row.
+        try:
+            await self.vector_store.delete_collection(project_id)
+        except QdrantError as exc:
+            logger.error(
+                "Failed to delete Qdrant collection after project delete",
+                project_id=str(project_id),
+                error=str(exc),
+            )
 
     async def get_by_id(self, project_id: UUID, accessible_ids: list[UUID]) -> Project:
         project = await self.session.get(Project, project_id)

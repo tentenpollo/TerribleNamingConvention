@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 import uuid
 
-from sqlalchemy import ForeignKey, text
+from sqlalchemy import ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,10 @@ from app.models.base import Base
 
 class DocumentSummary(Base):
     __tablename__ = "document_summaries"
+    __table_args__ = (
+        UniqueConstraint("document_id", name="uq_document_summaries_document_id"),
+        Index("ix_document_summaries_project_created", "project_id", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

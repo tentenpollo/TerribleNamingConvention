@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, ClassVar
 
+from arq import cron
 from arq.connections import RedisSettings
 from qdrant_client import AsyncQdrantClient
 
@@ -10,7 +11,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.ingestion.embedder import Embedder
 from app.ingestion.vector_store import VectorStore
-from app.workers.ingest import ingest_document
+from app.workers.ingest import ingest_document, sweep_pending_jobs
 
 
 async def on_startup(ctx: dict[str, Any]) -> None:
@@ -28,7 +29,8 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 class WorkerSettings:
     redis_settings: ClassVar[RedisSettings] = RedisSettings.from_dsn(settings.redis_url)
-    functions: ClassVar[list[Callable[..., Any]]] = [ingest_document]
+    functions: ClassVar[list[Callable[..., Any]]] = [ingest_document, sweep_pending_jobs]
+    cron_jobs: ClassVar[list[Any]] = [cron(sweep_pending_jobs, minute=set(range(0, 60, 5)))]
     max_jobs: ClassVar[int] = settings.arq_max_jobs
     on_startup: ClassVar[Callable[..., Any]] = on_startup
     on_shutdown: ClassVar[Callable[..., Any]] = on_shutdown

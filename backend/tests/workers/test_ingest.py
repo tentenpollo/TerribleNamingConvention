@@ -56,7 +56,7 @@ def _make_mock_document() -> Document:
     doc.project_id = uuid.uuid4()
     doc.filename = "test.md"
     doc.file_type = FileType.MARKDOWN.value
-    doc.raw_content = "# Hello\n\nThis is test content for ingestion."
+    doc.raw_bytes = b"# Hello\n\nThis is test content for ingestion."
     return doc
 
 
@@ -74,6 +74,10 @@ def _make_mock_session(
         session.commit = AsyncMock(side_effect=lambda: commit_calls.append("commit"))
 
     def mock_execute(statement):
+        # INSERT statements (e.g. pg_insert for idempotent summary) — no entity
+        if not hasattr(statement, "column_descriptions"):
+            return MagicMock()
+
         entity = statement.column_descriptions[0]["entity"]
         if entity is IngestionJob and job is not None:
             mock_result = MagicMock()
@@ -275,6 +279,60 @@ async def test_ingest_document_uses_project_chunk_config() -> None:
     assert chunk_text_mock.call_args.kwargs["overlap"] == 32
 
 
+@pytest.mark.unit
+async def test_ingest_document_binary_pdf_stored_and_parsed() -> None:
+    """Binary PDF bytes must survive upload without UnicodeDecodeError and parse cleanly."""
+    import fitz  # PyMuPDF
+
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((72, 100), "Phase 3.0 PDF hardening test content.")
+    pdf_bytes = pdf_doc.tobytes()
+    pdf_doc.close()
+
+    job = _make_mock_job()
+    doc = _make_mock_document()
+    doc.raw_bytes = pdf_bytes
+    doc.file_type = FileType.PDF.value
+    doc.filename = "test.pdf"
+    project = _make_mock_project()
+    session = _make_mock_session(job=job, doc=doc, project=project)
+    embedder = _make_mock_embedder()
+    vector_store = _make_mock_vector_store()
+
+    ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
+
+    with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
+        with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
+            async with session:
+                await ingest_document(ctx, job.id, doc.id, doc.project_id)
+
+    assert job.status == JobStatus.COMPLETE.value
+    vector_store.upsert.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_ingest_document_contextual_strategy_raises_not_implemented() -> None:
+    job = _make_mock_job()
+    doc = _make_mock_document()
+    project = _make_mock_project()
+    project.config = {"chunking_strategy": "contextual"}
+    session = _make_mock_session(job=job, doc=doc, project=project)
+    embedder = _make_mock_embedder()
+    vector_store = _make_mock_vector_store()
+
+    ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
+
+    with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
+        with pytest.raises(NotImplementedError):
+            async with session:
+                await ingest_document(ctx, job.id, doc.id, doc.project_id)
+
+    assert job.status == JobStatus.FAILED.value
+    assert job.error_message is not None
+    assert "implement" in job.error_message.lower()
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — require real Postgres, Redis, Qdrant
 # ---------------------------------------------------------------------------
@@ -284,15 +342,18 @@ async def test_ingest_document_uses_project_chunk_config() -> None:
 async def test_ingest_document_full_pipeline() -> None:
     from unittest.mock import patch
 
+    from qdrant_client import AsyncQdrantClient
     from sqlalchemy import delete
 
     from app.core import database
-    from app.core.qdrant import get_qdrant_client
+    from app.core.config import settings
     from app.ingestion.embedder import Embedder
     from app.ingestion.vector_store import VectorStore
     from app.models.document_summary import DocumentSummary
     from app.models.project import Project
     from app.models.team import Team
+
+    qdrant_client = AsyncQdrantClient(url=settings.qdrant_url)
 
     with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
         with patch(
@@ -335,8 +396,8 @@ async def test_ingest_document_full_pipeline() -> None:
                     project_id=project.id,
                     filename="integration-test.md",
                     file_type=FileType.MARKDOWN.value,
-                    raw_content=(
-                        "# Integration Test\n\nThis document verifies the full ingestion pipeline."
+                    raw_bytes=(
+                        b"# Integration Test\n\nThis document verifies the full ingestion pipeline."
                     ),
                 )
                 session.add(doc)
@@ -356,7 +417,7 @@ async def test_ingest_document_full_pipeline() -> None:
                 team_id = team.id
 
             embedder = Embedder()
-            vector_store = VectorStore(client=get_qdrant_client())
+            vector_store = VectorStore(client=qdrant_client)
 
             ctx: dict[str, object] = {
                 "embedder": embedder,
@@ -382,8 +443,9 @@ async def test_ingest_document_full_pipeline() -> None:
             assert summary.summary
             assert isinstance(summary.summary, dict)
 
-    vector_store = VectorStore(client=get_qdrant_client())
-    hits = await vector_store.search(project_id, query_vector=[0.0] * 384, top_k=10)
+    hits = await VectorStore(client=qdrant_client).search(
+        project_id, query_vector=[0.0] * 384, top_k=10
+    )
     assert len(hits) > 0
 
     first_payload = hits[0].payload
@@ -391,7 +453,7 @@ async def test_ingest_document_full_pipeline() -> None:
     assert first_payload["document_id"] == str(document_id)
     assert first_payload["filename"] == "integration-test.md"
 
-    await vector_store.delete_collection(project_id)
+    await VectorStore(client=qdrant_client).delete_collection(project_id)
 
     async with database.AsyncSessionLocal() as session:
         await session.execute(delete(IngestionJob).where(IngestionJob.project_id == project_id))
@@ -402,3 +464,257 @@ async def test_ingest_document_full_pipeline() -> None:
         await session.execute(delete(Project).where(Project.id == project_id))
         await session.execute(delete(Team).where(Team.id == team_id))
         await session.commit()
+
+
+@pytest.mark.integration
+async def test_ingest_document_idempotent_on_retry() -> None:
+    """Simulate an ARQ retry: failure after summary commit but before COMPLETE commit.
+
+    After two runs the Qdrant point count must equal the chunk count exactly (no
+    duplicates), and there must be exactly one document_summaries row.
+    """
+    from unittest.mock import patch
+
+    from qdrant_client import AsyncQdrantClient
+    from sqlalchemy import delete
+    from sqlalchemy import select as sa_select
+
+    from app.core import database
+    from app.core.config import settings
+    from app.ingestion.embedder import Embedder
+    from app.ingestion.vector_store import VectorStore
+    from app.models.document_summary import DocumentSummary
+    from app.models.project import Project
+    from app.models.team import Team
+    from app.workers.ingest import ingest_document
+
+    project_id = None
+    team_id = None
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            team = Team(name="Idempotency Integration Team")
+            session.add(team)
+            await session.flush()
+
+            project = Project(
+                name="Idempotency Integration Project",
+                team_id=team.id,
+                config={},
+            )
+            session.add(project)
+            await session.flush()
+
+            doc = Document(
+                project_id=project.id,
+                filename="idempotency-test.md",
+                file_type=FileType.MARKDOWN.value,
+                raw_bytes=b"# Idempotency\n\nThis document tests retry safety.",
+            )
+            session.add(doc)
+            await session.flush()
+
+            job = IngestionJob(
+                project_id=project.id,
+                document_id=doc.id,
+                status=JobStatus.PENDING.value,
+            )
+            session.add(job)
+            await session.commit()
+
+            project_id = project.id
+            document_id = doc.id
+            job_id = job.id
+            team_id = team.id
+
+        embedder = Embedder()
+        qdrant_client = AsyncQdrantClient(url=settings.qdrant_url)
+        vector_store = VectorStore(client=qdrant_client)
+        ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
+
+        summary_mock = {
+            "summary": "Idempotency test.",
+            "key_points": [],
+            "technical_concepts": [],
+            "architectural_components": [],
+            "decisions": [],
+            "action_items": [],
+            "entities": {
+                "people": [],
+                "organizations": [],
+                "technologies": [],
+                "repositories": [],
+                "services": [],
+            },
+            "topics": [],
+            "important_relationships": [],
+            "document_type": "other",
+            "confidence": 0.9,
+        }
+
+        # First run: raise after summary commit to simulate mid-job crash
+        call_count = 0
+
+        async def fail_once() -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Injected failure after summary commit")
+
+        with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.ingest.summarize_document", return_value=summary_mock):
+                with patch("app.workers.ingest._after_summary_commit", fail_once):
+                    with pytest.raises(RuntimeError, match="Injected failure"):
+                        await ingest_document(ctx, job_id, document_id, project_id)
+
+        assert call_count == 1, "Failure injection must have fired (not a vacuous pass)"
+
+        # Reset job to PENDING so the second run proceeds
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(sa_select(IngestionJob).where(IngestionJob.id == job_id))
+            job_row = result.scalar_one()
+            job_row.status = JobStatus.PENDING.value
+            job_row.error_message = None
+            await session.commit()
+
+        # Second run: should complete cleanly
+        with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.ingest.summarize_document", return_value=summary_mock):
+                await ingest_document(ctx, job_id, document_id, project_id)
+
+        # Count vectors in Qdrant — must equal chunk count, not double
+        async with database.AsyncSessionLocal() as session:
+            from app.ingestion.chunker import ChunkingStrategy, chunk_text
+            from app.ingestion.parser import parse_file
+
+            result = await session.execute(sa_select(Document).where(Document.id == document_id))
+            doc_row = result.scalar_one()
+            parsed = parse_file(content=doc_row.raw_bytes, file_type=doc_row.file_type)
+            expected_chunks = chunk_text(
+                text=parsed,
+                strategy=ChunkingStrategy.NAIVE,
+                chunk_size=512,
+                overlap=64,
+            )
+
+        expected_count = len(expected_chunks)
+        hits = await vector_store.search(project_id, query_vector=[0.0] * 384, top_k=100)
+        assert len(hits) == expected_count, (
+            f"Expected exactly {expected_count} Qdrant points, got {len(hits)}"
+        )
+
+        async with database.AsyncSessionLocal() as session:
+            summary_result = await session.execute(
+                sa_select(DocumentSummary).where(DocumentSummary.document_id == document_id)
+            )
+            summaries = summary_result.scalars().all()
+        assert len(summaries) == 1, (
+            f"Expected exactly 1 document_summaries row, got {len(summaries)}"
+        )
+
+    finally:
+        if project_id is not None:
+            try:
+                await vector_store.delete_collection(project_id)
+            except Exception:
+                pass
+        if project_id is not None:
+            async with database.AsyncSessionLocal() as session:
+                await session.execute(
+                    delete(IngestionJob).where(IngestionJob.project_id == project_id)
+                )
+                await session.execute(
+                    delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+                )
+                await session.execute(delete(Document).where(Document.project_id == project_id))
+                await session.execute(delete(Project).where(Project.id == project_id))
+                if team_id is not None:
+                    await session.execute(delete(Team).where(Team.id == team_id))
+                await session.commit()
+
+
+@pytest.mark.integration
+async def test_sweep_pending_jobs_re_enqueues_stale_leaves_fresh() -> None:
+    """Stale PENDING jobs (> 10 min) must be re-enqueued; fresh ones must be left alone."""
+    from unittest.mock import AsyncMock, patch
+
+    from sqlalchemy import delete, text
+
+    from app.core import database
+    from app.models.project import Project
+    from app.models.team import Team
+    from app.workers.ingest import sweep_pending_jobs
+
+    project_id = None
+    team_id = None
+    stale_job_id = None
+    fresh_job_id = None
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            team = Team(name="Sweep Integration Team")
+            session.add(team)
+            await session.flush()
+
+            project = Project(name="Sweep Integration Project", team_id=team.id, config={})
+            session.add(project)
+            await session.flush()
+            project_id = project.id
+            team_id = team.id
+
+            stale_job = IngestionJob(
+                project_id=project.id,
+                status=JobStatus.PENDING.value,
+            )
+            session.add(stale_job)
+
+            fresh_job = IngestionJob(
+                project_id=project.id,
+                status=JobStatus.PENDING.value,
+            )
+            session.add(fresh_job)
+            await session.flush()
+            stale_job_id = stale_job.id
+            fresh_job_id = fresh_job.id
+            await session.commit()
+
+        # Back-date the stale job to 15 minutes ago
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(
+                text(
+                    "UPDATE ingestion_jobs SET created_at = now() - interval '15 minutes'"
+                    " WHERE id = :id"
+                ),
+                {"id": stale_job_id},
+            )
+            await session.commit()
+
+        mock_arq = AsyncMock()
+        mock_arq.enqueue_job.return_value = object()  # non-None = successfully enqueued
+
+        ctx: dict[str, object] = {"redis": mock_arq}
+
+        with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+            await sweep_pending_jobs(ctx)
+
+        enqueued_job_ids = {
+            call.kwargs.get("job_id") for call in mock_arq.enqueue_job.call_args_list
+        }
+
+        assert stale_job_id in enqueued_job_ids, "Stale job must be re-enqueued"
+        assert fresh_job_id not in enqueued_job_ids, "Fresh job must not be re-enqueued"
+
+        # Verify the fixed _job_id format to prevent ARQ duplicate enqueue
+        for call in mock_arq.enqueue_job.call_args_list:
+            assert call.kwargs.get("_job_id") == f"ingest-{call.kwargs.get('job_id')}"
+
+    finally:
+        if project_id is not None:
+            async with database.AsyncSessionLocal() as session:
+                await session.execute(
+                    delete(IngestionJob).where(IngestionJob.project_id == project_id)
+                )
+                await session.execute(delete(Project).where(Project.id == project_id))
+                if team_id is not None:
+                    await session.execute(delete(Team).where(Team.id == team_id))
+                await session.commit()

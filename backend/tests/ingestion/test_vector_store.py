@@ -4,17 +4,23 @@ from unittest.mock import AsyncMock
 import uuid
 
 import pytest
+import pytest_asyncio
 
 from app.core.exceptions import QdrantError
-from app.core.qdrant import get_qdrant_client
 from app.ingestion.chunker import Chunk
 from app.ingestion.embedder import EmbeddingResult
 from app.ingestion.vector_store import VectorStore, collection_name
 
 
-@pytest.fixture
-def vector_store() -> VectorStore:
-    return VectorStore(client=get_qdrant_client())
+@pytest_asyncio.fixture(loop_scope="function", scope="function")
+async def vector_store() -> VectorStore:
+    from qdrant_client import AsyncQdrantClient
+
+    from app.core.config import settings
+
+    client = AsyncQdrantClient(url=settings.qdrant_url)
+    yield VectorStore(client=client)
+    await client.close()
 
 
 @pytest.fixture
@@ -68,6 +74,31 @@ def test_collection_name_format(project_a: uuid.UUID) -> None:
 
 
 @pytest.mark.unit
+async def test_upsert_point_ids_are_stable_across_calls(
+    store: VectorStore,
+    mock_client: AsyncMock,
+    project_a: uuid.UUID,
+    document_id: uuid.UUID,
+    sample_embedding_results: list[EmbeddingResult],
+) -> None:
+    mock_client.collection_exists.return_value = True
+
+    await store.upsert(project_a, sample_embedding_results, document_id)
+    first_call_points = mock_client.upsert.call_args_list[0][1]["points"]
+    first_ids = [p.id for p in first_call_points]
+
+    mock_client.reset_mock()
+    mock_client.collection_exists.return_value = True
+
+    await store.upsert(project_a, sample_embedding_results, document_id)
+    second_call_points = mock_client.upsert.call_args_list[0][1]["points"]
+    second_ids = [p.id for p in second_call_points]
+
+    assert first_ids == second_ids, "Point IDs must be deterministic across retries"
+    assert len(set(first_ids)) == len(first_ids), "Each chunk must have a unique ID"
+
+
+@pytest.mark.unit
 async def test_ensure_collection_creates_when_not_exists(
     store: VectorStore,
     mock_client: AsyncMock,
@@ -80,6 +111,11 @@ async def test_ensure_collection_creates_when_not_exists(
     mock_client.create_collection.assert_called_once()
     call_kwargs = mock_client.create_collection.call_args[1]
     assert call_kwargs["collection_name"] == f"project_{project_a}"
+    # v2 schema: named dense vector + sparse bm25 (required by Phase 4 hybrid retrieval)
+    assert "dense" in call_kwargs["vectors_config"], "dense vector must be named 'dense'"
+    assert "bm25" in call_kwargs["sparse_vectors_config"], (
+        "sparse vector 'bm25' must be declared at collection creation"
+    )
 
 
 @pytest.mark.unit

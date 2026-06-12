@@ -41,10 +41,21 @@ async def get_team_service(
     return TeamService(session)
 
 
+_vector_store: VectorStore | None = None
+
+
+def get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore(client=get_qdrant_client())
+    return _vector_store
+
+
 async def get_project_service(
     session: AsyncSession = Depends(get_async_session),
+    vector_store: VectorStore = Depends(get_vector_store),
 ) -> ProjectService:
-    return ProjectService(session)
+    return ProjectService(session, vector_store)
 
 
 async def get_current_user(
@@ -107,16 +118,6 @@ def _unauthorized() -> HTTPException:
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
     )
-
-
-_vector_store: VectorStore | None = None
-
-
-def get_vector_store() -> VectorStore:
-    global _vector_store
-    if _vector_store is None:
-        _vector_store = VectorStore(client=get_qdrant_client())
-    return _vector_store
 
 
 def get_embedder() -> Embedder:

@@ -70,3 +70,18 @@ async def update_project(
     except AccessDeniedError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.message) from exc
     return ProjectResponse.model_validate(project)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(
+    project_id: UUID,
+    _current_user: User = Depends(require_role(Role.ADMIN)),
+    accessible_ids: list[UUID] = Depends(get_accessible_projects),
+    project_service: ProjectService = Depends(get_project_service),
+) -> None:
+    try:
+        await project_service.delete(project_id, accessible_ids)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message) from exc
+    except AccessDeniedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.message) from exc

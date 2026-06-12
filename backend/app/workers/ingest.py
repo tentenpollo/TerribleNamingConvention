@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import cast
 import uuid
 
+from arq.connections import ArqRedis
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -40,23 +43,25 @@ async def ingest_document(
             project = await _fetch_project(session, project_id)
 
             parsed_text = parse_file(
-                content=doc.raw_content.encode(),
+                content=doc.raw_bytes,
                 file_type=doc.file_type,
             )
 
             chunk_size = project.config.get("chunk_size", settings.default_chunk_size)
             chunk_overlap = project.config.get("chunk_overlap", settings.default_chunk_overlap)
-            # TODO: read from project.config when contextual/late are implemented
+            strategy = ChunkingStrategy(
+                project.config.get("chunking_strategy", settings.default_chunking_strategy)
+            )
             chunks = chunk_text(
                 text=parsed_text,
-                strategy=ChunkingStrategy.NAIVE,
+                strategy=strategy,
                 chunk_size=chunk_size,
                 overlap=chunk_overlap,
             )
             for chunk in chunks:
                 chunk.metadata["filename"] = doc.filename
 
-            embedding_results = embedder.embed(chunks)
+            embedding_results = await asyncio.to_thread(embedder.embed, chunks)
 
             await vector_store.upsert(project_id, embedding_results, document_id)
 
@@ -67,13 +72,17 @@ async def ingest_document(
                 model=context_model,
             )
 
-            summary = DocumentSummary(
-                document_id=doc.id,
-                project_id=project_id,
-                summary=summary_dict,
+            await session.execute(
+                pg_insert(DocumentSummary)
+                .values(
+                    document_id=doc.id,
+                    project_id=project_id,
+                    summary=summary_dict,
+                )
+                .on_conflict_do_nothing(constraint="uq_document_summaries_document_id")
             )
-            session.add(summary)
             await session.commit()
+            await _after_summary_commit()
 
             summary_count_result = await session.execute(
                 select(func.count())
@@ -118,6 +127,40 @@ async def ingest_document(
             raise
 
 
+async def sweep_pending_jobs(ctx: dict[str, object]) -> None:
+    arq_pool = cast(ArqRedis, ctx["redis"])
+    cutoff = datetime.now(UTC) - timedelta(minutes=10)
+    scanned = 0
+    enqueued = 0
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(IngestionJob).where(
+                IngestionJob.status == JobStatus.PENDING.value,
+                IngestionJob.created_at < cutoff,
+            )
+        )
+        jobs = list(result.scalars().all())
+
+    for job in jobs:
+        scanned += 1
+        enqueue_result = await arq_pool.enqueue_job(
+            "ingest_document",
+            job_id=job.id,
+            document_id=job.document_id,
+            project_id=job.project_id,
+            _job_id=f"ingest-{job.id}",
+        )
+        if enqueue_result is not None:
+            enqueued += 1
+
+    logger.info(
+        "Pending ingestion job sweep completed",
+        scanned=scanned,
+        enqueued=enqueued,
+    )
+
+
 async def _fetch_job(session: AsyncSession, job_id: uuid.UUID) -> IngestionJob:
     result = await session.execute(select(IngestionJob).where(IngestionJob.id == job_id))
     job = result.scalar_one_or_none()
@@ -147,3 +190,7 @@ async def _mark_job_failed(session: AsyncSession, job_id: uuid.UUID, error_messa
     job.status = JobStatus.FAILED.value
     job.error_message = error_message
     await session.commit()
+
+
+async def _after_summary_commit() -> None:
+    return None

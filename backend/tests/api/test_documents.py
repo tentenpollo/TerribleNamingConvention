@@ -256,6 +256,51 @@ async def test_list_documents_returns_list(
 
 
 @pytest.mark.asyncio
+async def test_upload_response_does_not_expose_raw_bytes(
+    async_client: AsyncClient,
+    member_token: str,
+    document_service: AsyncMock,
+    accessible_ids: list[uuid.UUID],
+) -> None:
+    project_id = uuid.uuid4()
+    accessible_ids.append(project_id)
+    document_service.upload.return_value = _make_job_response(project_id)
+
+    response = await async_client.post(
+        f"/projects/{project_id}/documents",
+        files={"file": ("test.md", b"# Hello", "text/markdown")},
+        headers={"Authorization": f"Bearer {member_token}"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert "raw_bytes" not in body
+    assert "raw_content" not in body
+
+
+@pytest.mark.asyncio
+async def test_list_documents_response_does_not_expose_raw_bytes(
+    async_client: AsyncClient,
+    member_token: str,
+    document_service: AsyncMock,
+    accessible_ids: list[uuid.UUID],
+) -> None:
+    project_id = uuid.uuid4()
+    accessible_ids.append(project_id)
+    document_service.list_documents.return_value = [_make_document_response(project_id, "a.md")]
+
+    response = await async_client.get(
+        f"/projects/{project_id}/documents",
+        headers={"Authorization": f"Bearer {member_token}"},
+    )
+
+    assert response.status_code == 200
+    for item in response.json():
+        assert "raw_bytes" not in item
+        assert "raw_content" not in item
+
+
+@pytest.mark.asyncio
 async def test_get_job_returns_status(
     async_client: AsyncClient,
     member_token: str,
@@ -332,7 +377,9 @@ async def test_upload_document_creates_job_and_pollable() -> None:
     team_id: uuid.UUID | None = None
 
     try:
-        arq_pool = await create_pool(RedisSettings.from_dsn("redis://localhost:6379/0"))
+        from app.core.config import settings
+
+        arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
         app.state.arq_pool = arq_pool
 
         async with AsyncSessionLocal() as session:
@@ -408,7 +455,7 @@ async def test_upload_document_creates_job_and_pollable() -> None:
             )
             doc = doc_result.scalar_one()
             assert doc.filename == "integration.md"
-            assert doc.raw_content == "# Integration\n\nTest content."
+            assert doc.raw_bytes == b"# Integration\n\nTest content."
 
             job_result = await session.execute(
                 sa_select(JobModel).where(JobModel.id == uuid.UUID(job_id)),

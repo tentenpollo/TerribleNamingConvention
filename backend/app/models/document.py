@@ -4,7 +4,7 @@ from datetime import datetime
 import enum
 import uuid
 
-from sqlalchemy import ForeignKey, Text, text
+from sqlalchemy import ForeignKey, LargeBinary, Text, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,7 +32,7 @@ class Document(Base):
     )
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     file_type: Mapped[str] = mapped_column(Text, nullable=False)
-    raw_content: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,

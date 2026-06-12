@@ -21,8 +21,13 @@ def mock_session() -> AsyncMock:
 
 
 @pytest.fixture
-def project_service(mock_session: AsyncMock) -> ProjectService:
-    return ProjectService(mock_session)
+def mock_vector_store() -> AsyncMock:
+    return AsyncMock()
+
+
+@pytest.fixture
+def project_service(mock_session: AsyncMock, mock_vector_store: AsyncMock) -> ProjectService:
+    return ProjectService(mock_session, mock_vector_store)
 
 
 @pytest.mark.asyncio
@@ -142,6 +147,107 @@ async def test_update_project_out_of_scope_raises(
 
     with pytest.raises(AccessDeniedError):
         await project_service.update(project.id, ProjectUpdate(name="New"), [])
+
+
+@pytest.mark.asyncio
+async def test_delete_project_commits_and_deletes_collection(
+    project_service: ProjectService,
+    mock_session: AsyncMock,
+    mock_vector_store: AsyncMock,
+) -> None:
+    project = _make_project("To Delete")
+    mock_session.get.return_value = project
+
+    await project_service.delete(project.id, [project.id])
+
+    mock_session.delete.assert_awaited_once_with(project)
+    mock_session.commit.assert_awaited_once()
+    mock_vector_store.delete_collection.assert_awaited_once_with(project.id)
+
+
+@pytest.mark.asyncio
+async def test_delete_project_qdrant_failure_does_not_raise(
+    project_service: ProjectService,
+    mock_session: AsyncMock,
+    mock_vector_store: AsyncMock,
+) -> None:
+    from app.core.exceptions import QdrantError
+
+    project = _make_project("To Delete")
+    mock_session.get.return_value = project
+    mock_vector_store.delete_collection.side_effect = QdrantError("connection lost")
+
+    # Must not raise — Qdrant failure is logged but the project row is already gone
+    await project_service.delete(project.id, [project.id])
+
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_project_not_found_raises(
+    project_service: ProjectService,
+    mock_session: AsyncMock,
+) -> None:
+    mock_session.get.return_value = None
+
+    with pytest.raises(ProjectNotFoundError):
+        await project_service.delete(uuid.uuid4(), [])
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — require real Postgres + Qdrant
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_delete_project_removes_qdrant_collection() -> None:
+    from qdrant_client import AsyncQdrantClient
+    from sqlalchemy import delete as sa_delete
+
+    from app.core import database
+    from app.core.config import settings
+    from app.ingestion.vector_store import VectorStore
+    from app.models.project import Project
+    from app.models.team import Team
+    from app.services.project import ProjectService
+
+    vector_store = VectorStore(client=AsyncQdrantClient(url=settings.qdrant_url))
+    project_id = None
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            team = Team(name="Delete Integration Team")
+            session.add(team)
+            await session.flush()
+
+            project = Project(
+                name="Delete Integration Project",
+                team_id=team.id,
+                config={},
+            )
+            session.add(project)
+            await session.flush()
+            project_id = project.id
+            await session.commit()
+
+        await vector_store.ensure_collection(project_id)
+        assert await vector_store._client.collection_exists(f"project_{project_id}")
+
+        async with database.AsyncSessionLocal() as session:
+            svc = ProjectService(session, vector_store)
+            await svc.delete(project_id, [project_id])
+
+        assert not await vector_store._client.collection_exists(f"project_{project_id}")
+
+    finally:
+        if project_id is not None:
+            try:
+                await vector_store.delete_collection(project_id)
+            except Exception:
+                pass
+            async with database.AsyncSessionLocal() as session:
+                await session.execute(sa_delete(Project).where(Project.id == project_id))
+                await session.commit()
 
 
 def _make_team(name: str) -> Team:

@@ -38,13 +38,11 @@ class DocumentService:
         if extension not in SUPPORTED_EXTENSIONS:
             raise UnsupportedFileTypeError(f"File type '{extension}' is not supported")
 
-        raw_content = content.decode("utf-8")
-
         doc = Document(
             project_id=project_id,
             filename=filename,
             file_type=file_type.value,
-            raw_content=raw_content,
+            raw_bytes=content,
         )
         self.session.add(doc)
         await self.session.flush()
@@ -62,6 +60,7 @@ class DocumentService:
             job_id=job.id,
             document_id=doc.id,
             project_id=project_id,
+            _job_id=f"ingest-{job.id}",
         )
 
         return IngestionJobResponse.model_validate(job)

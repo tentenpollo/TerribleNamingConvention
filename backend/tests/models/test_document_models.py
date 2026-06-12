@@ -15,7 +15,7 @@ async def test_create_and_retrieve_document(db_session, test_project) -> None:
         project_id=test_project.id,
         filename="report.pdf",
         file_type=FileType.PDF.value,
-        raw_content="PDF content",
+        raw_bytes=b"PDF content",
     )
     db_session.add(doc)
     await db_session.flush()

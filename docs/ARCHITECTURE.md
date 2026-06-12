@@ -362,6 +362,7 @@ Chunks stored with payload:
 }
 ```
 Collections are created with a named dense vector (384, cosine) and sparse_vectors_config declared at creation — Qdrant cannot add sparse vectors to an existing collection, and Phase 4 hybrid retrieval requires them.
+Collections created before schema v2 must be deleted and their documents re-uploaded.
 ---
 
 ## Access Control Architecture

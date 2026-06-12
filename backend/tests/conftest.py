@@ -104,7 +104,7 @@ async def test_document(db_session, test_project: Project) -> Document:
         project_id=test_project.id,
         filename="test.md",
         file_type=FileType.MARKDOWN.value,
-        raw_content="# Test Document\n\nContent here.",
+        raw_bytes=b"# Test Document\n\nContent here.",
     )
     db_session.add(doc)
     await db_session.flush()

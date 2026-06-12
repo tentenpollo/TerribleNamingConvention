@@ -6,14 +6,18 @@ import uuid
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import (
     Distance,
+    Modifier,
     PointStruct,
     QueryResponse,
     ScoredPoint,
+    SparseVectorParams,
     VectorParams,
 )
 
 from app.core.exceptions import QdrantError
 from app.ingestion.embedder import EmbeddingResult
+
+CHUNK_NAMESPACE = uuid.UUID("7f6ae9bc-2d42-4e2c-9d98-5f79a76c8394")
 
 
 def collection_name(project_id: uuid.UUID) -> str:
@@ -32,10 +36,15 @@ class VectorStore:
             if not exists:
                 await self._client.create_collection(
                     collection_name=name,
-                    vectors_config=VectorParams(
-                        size=self._vector_size,
-                        distance=Distance.COSINE,
-                    ),
+                    vectors_config={
+                        "dense": VectorParams(
+                            size=self._vector_size,
+                            distance=Distance.COSINE,
+                        ),
+                    },
+                    sparse_vectors_config={
+                        "bm25": SparseVectorParams(modifier=Modifier.IDF),
+                    },
                 )
         except Exception as exc:
             raise QdrantError(
@@ -53,8 +62,8 @@ class VectorStore:
         now = datetime.now(UTC).isoformat()
         points = [
             PointStruct(
-                id=str(uuid.uuid4()),
-                vector=result.vector,
+                id=str(uuid.uuid5(CHUNK_NAMESPACE, f"{document_id}:{result.chunk.index}")),
+                vector={"dense": result.vector},
                 payload={
                     "document_id": str(document_id),
                     "project_id": str(project_id),
@@ -87,6 +96,7 @@ class VectorStore:
             response: QueryResponse = await self._client.query_points(
                 collection_name=name,
                 query=query_vector,
+                using="dense",
                 limit=top_k,
             )
             return response.points

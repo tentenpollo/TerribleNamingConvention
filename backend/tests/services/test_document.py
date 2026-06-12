@@ -181,6 +181,6 @@ def _make_document(project_id: uuid.UUID, filename: str) -> Document:
         project_id=project_id,
         filename=filename,
         file_type=FileType.MARKDOWN.value,
-        raw_content="content",
+        raw_bytes=b"content",
         created_at=datetime.now(UTC),
     )

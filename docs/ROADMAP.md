@@ -50,7 +50,7 @@
 | RBAC dependency — require_role(Role.X) composable | ✅ |
 | Access scope helper — get_accessible_project_ids(user) | ✅ |
 | Team CRUD endpoints (admin only) | ✅ |
-| Project CRUD endpoints | ✅ |
+| Project CRUD endpoints | ✅ (delete added in Phase 3.0 hardening) |
 | Team member assignment | ✅ |
 | Tests: register, login, token validation | ✅ |
 | Tests: role enforcement — member cannot hit admin routes | ✅ |
@@ -82,6 +82,26 @@
 | Tests: two projects have isolated Qdrant collections | ✅ |
 
 **Done when:** Two projects each have documents ingested into fully isolated Qdrant collections. ✅
+
+---
+
+## Phase 3.0 — Phase 2 Ingestion Hardening
+**Goal: Make the completed ingestion pipeline safe to retry and ready for CAG/query work.**
+
+| Task | Status |
+|---|---|
+| Store raw document bytes instead of UTF-8 text | ✅ |
+| Deterministic Qdrant chunk point IDs | ✅ |
+| Idempotent document summaries | ✅ |
+| Event-log index for project summary counts | ✅ |
+| Qdrant collection schema v2 with named dense and sparse vectors | ✅ |
+| Offload CPU-bound embedding from the ARQ event loop | ✅ |
+| Stale pending ingestion job sweeper | ✅ |
+| Delete project Qdrant collection on project delete | ✅ |
+| Remove vestigial root workers directory | ✅ |
+| Default chunking strategy reflects implemented strategies | ✅ |
+
+**Done when:** Phase 2 ingestion retries do not duplicate vectors or summaries, and stale pending jobs can be recovered.
 
 ---
 

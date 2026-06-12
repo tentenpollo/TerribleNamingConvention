@@ -261,6 +261,55 @@ async def test_update_project_member_blocked(
     assert response.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_delete_project_admin_success(
+    async_client: AsyncClient,
+    admin_token: str,
+    project_service: AsyncMock,
+    accessible_ids: list[uuid.UUID],
+) -> None:
+    project_id = uuid.uuid4()
+    accessible_ids.append(project_id)
+    project_service.delete.return_value = None
+
+    response = await async_client.delete(
+        f"/projects/{project_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 204
+    project_service.delete.assert_awaited_once_with(project_id, [project_id])
+
+
+@pytest.mark.asyncio
+async def test_delete_project_member_blocked(
+    async_client: AsyncClient,
+    member_token: str,
+) -> None:
+    response = await async_client.delete(
+        f"/projects/{uuid.uuid4()}",
+        headers={"Authorization": f"Bearer {member_token}"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_project_not_found(
+    async_client: AsyncClient,
+    admin_token: str,
+    project_service: AsyncMock,
+) -> None:
+    project_service.delete.side_effect = ProjectNotFoundError("Missing")
+
+    response = await async_client.delete(
+        f"/projects/{uuid.uuid4()}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 404
+
+
 def _make_project(name: str, team_id: uuid.UUID, description: str | None = None) -> Project:
     return Project(
         id=uuid.uuid4(),
