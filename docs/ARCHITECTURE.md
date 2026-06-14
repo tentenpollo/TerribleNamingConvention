@@ -192,25 +192,38 @@ QueryService.query()
 ## CAG Belief State Lifecycle
 
 ```
-                    document_summaries (event log)
-                    ──────────────────────────────
+                     document_summaries (event log)
+                     ──────────────────────────────
 doc 1 ingested  →   summary_1  (immutable, never deleted)
 doc 2 ingested  →   summary_2
 ...
 doc N ingested  →   summary_N
                               │
-                    ┌─────────▼──────────────┐
-                    │  Threshold check        │
-                    │  N % threshold == 0?    │
-                    └─────────┬──────────────┘
-                              │ yes
+                    ┌─────────▼──────────────────────────┐
+                    │  Threshold check (watermark-based)  │
+                    │                                      │
+                    │  latest = belief_states watermark    │
+                    │  pending = count summaries with      │
+                    │    created_at > latest (or all)      │
+                    │                                      │
+                    │  enqueue if:                         │
+                    │    - no belief state yet and         │
+                    │      pending >= 1                    │
+                    │    - pending >= threshold            │
+                    │                                      │
+                    │  enqueue_job uses fixed id           │
+                    │  "cag-update-{project_id}" → ARQ     │
+                    │  deduplicates concurrent triggers    │
+                    └─────────┬────────────────────────────┘
+                              │ yes / first doc
                     ┌─────────▼──────────────┐
                     │  CAGUpdateJob           │
                     │                         │
                     │  input:                 │
                     │    current belief_state │
-                    │    last N summaries     │
-                    │    (rolling window)     │
+                    │    window of summaries  │
+                    │    after watermark      │
+                    │    (batched to 40)      │
                     │                         │
                     │  LLM synthesizes        │
                     │  new belief_state       │
@@ -226,6 +239,7 @@ doc N ingested  →   summary_N
     Map-Reduce over ALL document_summaries for project
     → fresh belief_state from scratch
     → guarantees no drift accumulates indefinitely
+
 ```
 
 ---

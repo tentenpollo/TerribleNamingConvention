@@ -2,16 +2,29 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
 import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from qdrant_client import AsyncQdrantClient
+from sqlalchemy import delete, select, text
 
 from app.core import database
+from app.core.config import settings
 from app.core.exceptions import BeliefStateVersionConflictError, InvalidBeliefStateError
+from app.ingestion.embedder import Embedder
+from app.ingestion.vector_store import VectorStore
+from app.models.belief_state import BeliefState
+from app.models.document import Document, FileType
+from app.models.document_summary import DocumentSummary
+from app.models.ingestion_job import IngestionJob, JobStatus
+from app.models.project import Project
+from app.models.team import Team
 from app.schemas.belief_state import BeliefStateContent
 from app.services.cag import CAGService
+from app.workers.cag import cag_update
+from app.workers.ingest import ingest_document
 
 
 def _sample_content() -> BeliefStateContent:
@@ -208,3 +221,285 @@ async def test_get_window_since_excludes_raw_text_fallback(cag_project) -> None:
     assert "explicit_false" in texts
     # order is created_at ASC — just confirm both are present in any order
     assert len(texts) == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration: CAG update job
+# ---------------------------------------------------------------------------
+
+
+_VALID_BELIEF_STATE_JSON = (
+    '{"project_summary": "Integration test project summary.", '
+    '"decisions": [], "open_items": [], '
+    '"key_people": [], "recurring_themes": []}'
+)
+
+
+_SUMMARY_MOCK_RETURN = {
+    "summary": "Integration test document summary.",
+    "key_points": ["test"],
+    "technical_concepts": [],
+    "architectural_components": [],
+    "decisions": [],
+    "action_items": [],
+    "entities": {
+        "people": [],
+        "organizations": [],
+        "technologies": [],
+        "repositories": [],
+        "services": [],
+    },
+    "topics": [],
+    "important_relationships": [],
+    "document_type": "other",
+    "confidence": 0.9,
+}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio(loop_scope="function")
+async def test_first_document_ingest_creates_belief_state_v1(cag_project) -> None:
+    """Ingesting the first document of a fresh project must produce belief state v1."""
+    project_id = cag_project["project_id"]
+    team_id = cag_project["team_id"]
+
+    qdrant_client = AsyncQdrantClient(url=settings.qdrant_url)
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            doc = Document(
+                project_id=project_id,
+                filename="first-doc.md",
+                file_type=FileType.MARKDOWN.value,
+                raw_bytes=b"# First document\n\nThis is the first document.",
+            )
+            session.add(doc)
+            await session.flush()
+
+            job = IngestionJob(
+                project_id=project_id,
+                document_id=doc.id,
+                status=JobStatus.PENDING.value,
+            )
+            session.add(job)
+            await session.commit()
+
+            document_id = doc.id
+            job_id = job.id
+
+        embedder = Embedder()
+        vector_store = VectorStore(client=qdrant_client)
+
+        mock_arq = AsyncMock()
+        mock_arq.enqueue_job.return_value = None  # simulate ARQ dedup
+
+        ctx: dict[str, object] = {
+            "embedder": embedder,
+            "vector_store": vector_store,
+            "redis": mock_arq,
+        }
+
+        with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
+                await ingest_document(ctx, job_id, document_id, project_id)
+
+        mock_arq.enqueue_job.assert_awaited_once()
+        enqueue_kwargs = mock_arq.enqueue_job.call_args.kwargs
+        assert enqueue_kwargs.get("_job_id") == f"cag-update-{project_id}"
+
+        with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.cag.llm_call", return_value=_VALID_BELIEF_STATE_JSON):
+                await cag_update({"redis": mock_arq}, project_id)
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BeliefState).where(BeliefState.project_id == project_id)
+            )
+            rows = list(result.scalars().all())
+
+        assert len(rows) == 1
+        assert rows[0].version == 1
+        assert rows[0].rebuild_type == "incremental"
+        assert rows[0].summary_count_covered == 1
+
+    finally:
+        await vector_store.delete_collection(project_id)
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(delete(BeliefState).where(BeliefState.project_id == project_id))
+            await session.execute(
+                delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+            )
+            await session.execute(delete(Document).where(Document.project_id == project_id))
+            await session.execute(delete(IngestionJob).where(IngestionJob.project_id == project_id))
+            await session.execute(delete(Project).where(Project.id == project_id))
+            await session.execute(delete(Team).where(Team.id == team_id))
+            await session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio(loop_scope="function")
+async def test_concurrent_ingest_triggers_single_cag_version(cag_project) -> None:
+    """With threshold=5, 10 concurrent ingests should produce one version covering all 10."""
+    project_id = cag_project["project_id"]
+    team_id = cag_project["team_id"]
+
+    qdrant_client = AsyncQdrantClient(url=settings.qdrant_url)
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            # Set threshold to 5
+            await session.execute(
+                text("UPDATE projects SET config = CAST(:config AS jsonb) WHERE id = :id"),
+                {"id": project_id, "config": '{"cag_rebuild_threshold": 5}'},
+            )
+
+            doc_ids: list[uuid.UUID] = []
+            job_ids: list[uuid.UUID] = []
+            for i in range(10):
+                doc = Document(
+                    project_id=project_id,
+                    filename=f"concurrent-{i}.md",
+                    file_type=FileType.MARKDOWN.value,
+                    raw_bytes=f"# Document {i}\n\nContent for document {i}.".encode(),
+                )
+                session.add(doc)
+                await session.flush()
+
+                job = IngestionJob(
+                    project_id=project_id,
+                    document_id=doc.id,
+                    status=JobStatus.PENDING.value,
+                )
+                session.add(job)
+                await session.flush()
+
+                doc_ids.append(doc.id)
+                job_ids.append(job.id)
+
+            await session.commit()
+
+        embedder = Embedder()
+        vector_store = VectorStore(client=qdrant_client)
+
+        # Pre-create the collection so concurrent upserts do not race on creation.
+        await vector_store.ensure_collection(project_id)
+
+        mock_arq = AsyncMock()
+        mock_arq.enqueue_job.return_value = None  # simulate ARQ dedup
+
+        ctx: dict[str, object] = {
+            "embedder": embedder,
+            "vector_store": vector_store,
+            "redis": mock_arq,
+        }
+
+        with patch("app.workers.ingest.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
+                await asyncio.gather(
+                    *[ingest_document(ctx, job_ids[i], doc_ids[i], project_id) for i in range(10)]
+                )
+
+        # Every ingest that crossed the threshold attempted enqueue with the fixed job id.
+        enqueue_attempts = [
+            call
+            for call in mock_arq.enqueue_job.call_args_list
+            if call.kwargs.get("_job_id") == f"cag-update-{project_id}"
+        ]
+        assert len(enqueue_attempts) >= 1
+
+        # Simulate ARQ dedup: only one cag_update actually runs.
+        with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.cag.llm_call", return_value=_VALID_BELIEF_STATE_JSON):
+                await cag_update({"redis": mock_arq}, project_id)
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BeliefState).where(BeliefState.project_id == project_id)
+            )
+            rows = list(result.scalars().all())
+
+        # Either one version covering all 10, or multiple versions totaling 10 with
+        # monotonically increasing watermarks and no double-counting.
+        total_covered = sum(r.summary_count_covered for r in rows)
+        assert total_covered == 10, f"Expected total coverage 10, got {total_covered}"
+
+        if len(rows) > 1:
+            watermarks = [r.last_summary_created_at for r in rows]
+            assert watermarks == sorted(watermarks), "Watermarks must be monotonically increasing"
+            counts = [r.summary_count_covered for r in rows]
+            assert counts == sorted(counts), "summary_count_covered must increase across versions"
+
+    finally:
+        await vector_store.delete_collection(project_id)
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(delete(BeliefState).where(BeliefState.project_id == project_id))
+            await session.execute(
+                delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+            )
+            await session.execute(delete(Document).where(Document.project_id == project_id))
+            await session.execute(delete(IngestionJob).where(IngestionJob.project_id == project_id))
+            await session.execute(delete(Project).where(Project.id == project_id))
+            await session.execute(delete(Team).where(Team.id == team_id))
+            await session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio(loop_scope="function")
+async def test_fallback_only_summaries_never_trigger_insert(cag_project) -> None:
+    """If all summaries for a project are raw_text_fallback rows, cag_update must no-op."""
+    project_id = cag_project["project_id"]
+    team_id = cag_project["team_id"]
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            doc_id = uuid.uuid4()
+            await session.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(id, project_id, filename, file_type, raw_bytes) "
+                    "VALUES (:id, :pid, :fn, 'txt', '')"
+                ),
+                {"id": doc_id, "pid": project_id, "fn": "fallback.txt"},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO document_summaries "
+                    "(id, document_id, project_id, summary) "
+                    "VALUES (:id, :doc_id, :pid, CAST(:summary AS jsonb))"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "doc_id": doc_id,
+                    "pid": project_id,
+                    "summary": '{"raw_text_fallback": true, "text": "fallback"}',
+                },
+            )
+            await session.commit()
+
+        mock_llm = AsyncMock()
+        mock_arq = AsyncMock()
+
+        with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.cag.llm_call", mock_llm):
+                await cag_update({"redis": mock_arq}, project_id)
+
+        mock_llm.assert_not_awaited()
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BeliefState).where(BeliefState.project_id == project_id)
+            )
+            rows = list(result.scalars().all())
+
+        assert len(rows) == 0
+
+    finally:
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(delete(BeliefState).where(BeliefState.project_id == project_id))
+            await session.execute(
+                delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+            )
+            await session.execute(delete(Document).where(Document.project_id == project_id))
+            await session.execute(delete(Project).where(Project.id == project_id))
+            await session.execute(delete(Team).where(Team.id == team_id))
+            await session.commit()

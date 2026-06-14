@@ -6,7 +6,7 @@ from typing import cast
 import uuid
 
 from arq.connections import ArqRedis
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from app.models.document import Document
 from app.models.document_summary import DocumentSummary
 from app.models.ingestion_job import IngestionJob, JobStatus
 from app.models.project import Project
+from app.services.cag import CAGService
 
 
 async def ingest_document(
@@ -84,24 +85,7 @@ async def ingest_document(
             await session.commit()
             await _after_summary_commit()
 
-            summary_count_result = await session.execute(
-                select(func.count())
-                .select_from(DocumentSummary)
-                .where(
-                    DocumentSummary.project_id == project_id,
-                ),
-            )
-            summary_count = summary_count_result.scalar() or 0
-            cag_threshold = project.config.get(
-                "cag_rebuild_threshold", settings.default_cag_rebuild_threshold
-            )
-            if summary_count > 0 and summary_count % cag_threshold == 0:
-                logger.info(
-                    "CAG threshold reached, rebuild not yet implemented",
-                    project_id=str(project_id),
-                    summary_count=summary_count,
-                    cag_threshold=cag_threshold,
-                )
+            await _maybe_enqueue_cag_update(ctx, session, project)
 
             job.status = JobStatus.COMPLETE.value
             job.completed_at = datetime.now(UTC)
@@ -190,6 +174,39 @@ async def _mark_job_failed(session: AsyncSession, job_id: uuid.UUID, error_messa
     job.status = JobStatus.FAILED.value
     job.error_message = error_message
     await session.commit()
+
+
+async def _maybe_enqueue_cag_update(
+    ctx: dict[str, object],
+    session: AsyncSession,
+    project: Project,
+) -> None:
+    """Enqueue a CAG update if enough new summaries exist for the project.
+
+    Uses the belief-state watermark rather than a global modulo count so the
+    trigger is idempotent and race-safe under concurrent ingest workers.
+    """
+    cag_service = CAGService(session)
+    latest = await cag_service.get_latest(project.id)
+    watermark = latest.last_summary_created_at if latest else None
+
+    pending_count = await cag_service.count_pending(project.id, watermark)
+    threshold = project.config.get("cag_rebuild_threshold", settings.default_cag_rebuild_threshold)
+
+    should_enqueue = (latest is None and pending_count >= 1) or pending_count >= threshold
+
+    if should_enqueue:
+        arq_pool = cast(ArqRedis, ctx["redis"])
+        enqueue_result = await arq_pool.enqueue_job(
+            "cag_update",
+            project.id,
+            _job_id=f"cag-update-{project.id}",
+        )
+        if enqueue_result is None:
+            logger.info(
+                "CAG update already queued, skipping duplicate enqueue",
+                project_id=str(project.id),
+            )
 
 
 async def _after_summary_commit() -> None:

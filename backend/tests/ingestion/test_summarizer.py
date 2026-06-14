@@ -40,6 +40,46 @@ async def test_llm_call_failure_raises_llm_error() -> None:
 
 
 @pytest.mark.unit
+async def test_llm_call_passes_response_format_and_temperature() -> None:
+    mock_response = AsyncMock()
+    mock_response.choices = [AsyncMock()]
+    mock_response.choices[0].message.content = "{}"
+    mock_response.usage = AsyncMock()
+    mock_response.usage.total_tokens = 5
+
+    with patch("app.core.llm.litellm.acompletion", return_value=mock_response) as mock_completion:
+        await llm_call(
+            messages=[{"role": "user", "content": "hi"}],
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+
+    call_kwargs = mock_completion.call_args.kwargs
+    assert call_kwargs["response_format"] == {"type": "json_object"}
+    assert call_kwargs["temperature"] == 0
+
+
+@pytest.mark.unit
+async def test_llm_call_omits_optional_kwargs_when_none() -> None:
+    mock_response = AsyncMock()
+    mock_response.choices = [AsyncMock()]
+    mock_response.choices[0].message.content = "hi"
+    mock_response.usage = AsyncMock()
+    mock_response.usage.total_tokens = 1
+
+    with patch("app.core.llm.litellm.acompletion", return_value=mock_response) as mock_completion:
+        await llm_call(
+            messages=[{"role": "user", "content": "hi"}],
+            model="gpt-4o-mini",
+        )
+
+    call_kwargs = mock_completion.call_args.kwargs
+    assert "response_format" not in call_kwargs
+    assert "temperature" not in call_kwargs
+
+
+@pytest.mark.unit
 async def test_summarize_document_valid_json_returns_parsed_dict() -> None:
     expected = {
         "summary": "A technical design document describing the ingestion pipeline.",

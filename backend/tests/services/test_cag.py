@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 from pydantic import ValidationError
 import pytest
 
+from app.models.belief_state import BeliefState
 from app.schemas.belief_state import (
     BeliefStateContent,
     Decision,
@@ -200,3 +201,155 @@ class TestGetWindowSince:
         assert rows == []
         # Verify execute was called once (watermark filter was applied)
         mock_session.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Unit: synthesize_and_insert (mocked session)
+# ---------------------------------------------------------------------------
+
+
+def _mock_session_for_synthesize() -> AsyncMock:
+    session = AsyncMock()
+
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=session)
+    begin_cm.__aexit__ = AsyncMock(return_value=None)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    added_rows: list[BeliefState] = []
+
+    def capture_add(row: BeliefState) -> None:
+        added_rows.append(row)
+
+    async def populate_row(row: BeliefState) -> None:
+        if row.id is None:
+            row.id = uuid.uuid4()
+        if row.created_at is None:
+            row.created_at = datetime.now(UTC)
+
+    session.add = MagicMock(side_effect=capture_add)
+    session.refresh = AsyncMock(side_effect=populate_row)
+    session._added_rows = added_rows  # type: ignore[attr-defined]
+    return session
+
+
+def _mock_max_version_result(current_max: int | None) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = current_max
+    return result
+
+
+@pytest.mark.asyncio
+async def test_synthesize_and_insert_empty_window_returns_none() -> None:
+    from app.services.cag import CAGService
+
+    session = _mock_session_for_synthesize()
+    service = CAGService(session)
+
+    async def synthesize_fn(state: BeliefStateContent | None, window: list) -> BeliefStateContent:
+        raise RuntimeError("should not be called")
+
+    with patch.object(service, "get_latest", return_value=None):
+        with patch.object(service, "get_window_since", return_value=[]):
+            record, remaining = await service.synthesize_and_insert(
+                uuid.uuid4(), synthesize_fn, batch_size=40
+            )
+
+    assert record is None
+    assert remaining == 0
+    assert len(session._added_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_synthesize_and_insert_batches_large_window_and_sets_watermark() -> None:
+    from app.services.cag import CAGService
+
+    session = _mock_session_for_synthesize()
+    service = CAGService(session)
+
+    project_id = uuid.uuid4()
+    watermark = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    latest = MagicMock()
+    latest.last_summary_created_at = watermark
+    latest.summary_count_covered = 10
+    latest.state = BeliefStateContent(project_summary="existing")
+
+    window = []
+    for i in range(95):
+        summary = MagicMock()
+        summary.id = uuid.uuid4()
+        summary.created_at = watermark + timedelta(minutes=i + 1)
+        summary.summary = {"text": f"summary {i}"}
+        window.append(summary)
+
+    expected_40th_created_at = window[39].created_at
+
+    execute_results = [
+        MagicMock(),  # advisory lock
+        _mock_max_version_result(3),  # max version
+    ]
+    session.execute = AsyncMock(side_effect=execute_results)
+
+    async def synthesize_fn(state: BeliefStateContent | None, batch: list) -> BeliefStateContent:
+        assert len(batch) == 40
+        assert batch[0].created_at == window[0].created_at
+        assert batch[-1].created_at == window[39].created_at
+        return BeliefStateContent(project_summary="updated")
+
+    with patch.object(service, "get_latest", return_value=latest):
+        with patch.object(service, "get_window_since", return_value=window):
+            record, remaining = await service.synthesize_and_insert(
+                project_id, synthesize_fn, batch_size=40
+            )
+
+    assert record is not None
+    assert remaining == 55
+    assert len(session._added_rows) == 1
+    inserted = session._added_rows[0]
+    assert inserted.version == 4
+    assert inserted.rebuild_type == "incremental"
+    assert inserted.summary_count_covered == 50  # previous 10 + 40 consumed
+    assert inserted.last_summary_created_at == expected_40th_created_at
+    assert inserted.project_id == project_id
+
+
+@pytest.mark.asyncio
+async def test_synthesize_and_insert_initial_generation_no_watermark() -> None:
+    from app.services.cag import CAGService
+
+    session = _mock_session_for_synthesize()
+    service = CAGService(session)
+
+    project_id = uuid.uuid4()
+
+    window = []
+    for i in range(3):
+        summary = MagicMock()
+        summary.id = uuid.uuid4()
+        summary.created_at = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC) + timedelta(minutes=i)
+        summary.summary = {"text": f"summary {i}"}
+        window.append(summary)
+
+    execute_results = [
+        MagicMock(),  # advisory lock
+        _mock_max_version_result(None),  # no existing versions
+    ]
+    session.execute = AsyncMock(side_effect=execute_results)
+
+    async def synthesize_fn(state: BeliefStateContent | None, batch: list) -> BeliefStateContent:
+        assert state is None
+        assert batch == window
+        return BeliefStateContent(project_summary="initial")
+
+    with patch.object(service, "get_latest", return_value=None):
+        with patch.object(service, "get_window_since", return_value=window):
+            record, remaining = await service.synthesize_and_insert(
+                project_id, synthesize_fn, batch_size=40
+            )
+
+    assert record is not None
+    assert remaining == 0
+    inserted = session._added_rows[0]
+    assert inserted.version == 1
+    assert inserted.summary_count_covered == 3

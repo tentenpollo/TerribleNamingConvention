@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Literal
 import uuid
@@ -17,6 +18,11 @@ from app.core.exceptions import (
 from app.models.belief_state import BeliefState
 from app.models.document_summary import DocumentSummary
 from app.schemas.belief_state import BeliefStateContent, BeliefStateRecord, BeliefStateVersionMeta
+
+SynthesizeFn = Callable[
+    [BeliefStateContent | None, list[DocumentSummary]],
+    Awaitable[BeliefStateContent],
+]
 
 
 class CAGService:
@@ -84,6 +90,94 @@ class CAGService:
 
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def synthesize_and_insert(
+        self,
+        project_id: uuid.UUID,
+        synthesize_fn: SynthesizeFn,
+        batch_size: int = 40,
+    ) -> tuple[BeliefStateRecord | None, int]:
+        """Read the current belief state, synthesize a new version, and insert it.
+
+        Holds a transaction-scoped advisory lock across the read-synthesize-insert
+        sequence to serialize belief-state writes per project. The LLM call runs
+        inside that lock — a deliberate v1 trade-off that makes concurrent updates
+        for the same project single-flight; enqueue debounce keeps contention rare.
+
+        Returns the new record and the number of summaries remaining in the window
+        after the consumed batch (0 if the whole window was consumed).
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        async with self.session.begin():
+            await self.session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": f"cag:{project_id}"},
+            )
+
+            latest = await self.get_latest(project_id)
+            watermark = latest.last_summary_created_at if latest else None
+            previous_count = latest.summary_count_covered if latest else 0
+
+            window = await self.get_window_since(project_id, watermark)
+            if not window:
+                return None, 0
+
+            remaining = 0
+            if len(window) > batch_size:
+                remaining = len(window) - batch_size
+                window = window[:batch_size]
+
+            current_state = latest.state if latest else None
+            content = await synthesize_fn(current_state, window)
+            if not isinstance(content, BeliefStateContent):
+                raise TypeError("synthesize_fn must return a BeliefStateContent instance")
+
+            max_version_result = await self.session.execute(
+                select(func.max(BeliefState.version)).where(BeliefState.project_id == project_id)
+            )
+            current_max = max_version_result.scalar_one_or_none()
+            next_version = (current_max or 0) + 1
+
+            last_summary_created_at = max(summary.created_at for summary in window)
+            summary_count_covered = previous_count + len(window)
+
+            row = BeliefState(
+                project_id=project_id,
+                version=next_version,
+                state=content.model_dump(),
+                rebuild_type="incremental",
+                last_summary_created_at=last_summary_created_at,
+                summary_count_covered=summary_count_covered,
+            )
+            self.session.add(row)
+
+        await self.session.refresh(row)
+        return _to_record(row), remaining
+
+    async def count_pending(
+        self,
+        project_id: uuid.UUID,
+        watermark: datetime | None,
+    ) -> int:
+        """Count non-fallback summaries for project newer than the watermark."""
+        not_fallback = func.coalesce(
+            DocumentSummary.summary["raw_text_fallback"].as_boolean(),
+            False,
+        ).is_(False)
+
+        stmt = (
+            select(func.count())
+            .select_from(DocumentSummary)
+            .where(DocumentSummary.project_id == project_id)
+            .where(not_fallback)
+        )
+        if watermark is not None:
+            stmt = stmt.where(DocumentSummary.created_at > watermark)
+
+        result = await self.session.execute(stmt)
+        return result.scalar() or 0
 
     async def insert_version(
         self,

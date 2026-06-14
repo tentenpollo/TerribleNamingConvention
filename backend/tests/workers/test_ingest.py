@@ -11,7 +11,7 @@ from app.ingestion.embedder import EmbeddingResult
 from app.models.document import Document, FileType
 from app.models.ingestion_job import IngestionJob, JobStatus
 from app.models.project import Project
-from app.workers.ingest import ingest_document
+from app.workers.ingest import _maybe_enqueue_cag_update, ingest_document
 
 _SUMMARY_MOCK_RETURN = {
     "summary": "A test document for ingestion pipeline verification.",
@@ -138,8 +138,9 @@ async def test_ingest_document_happy_path_sets_complete() -> None:
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
         with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
-            async with session:
-                await ingest_document(ctx, job_id, document_id, project_id)
+            with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+                async with session:
+                    await ingest_document(ctx, job_id, document_id, project_id)
 
     assert job.status == JobStatus.COMPLETE.value
     assert job.completed_at is not None
@@ -169,9 +170,10 @@ async def test_ingest_document_parse_failure_sets_failed() -> None:
     project_id = doc.project_id
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
-        with pytest.raises(UnsupportedFileTypeError):
-            async with session:
-                await ingest_document(ctx, job_id, document_id, project_id)
+        with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+            with pytest.raises(UnsupportedFileTypeError):
+                async with session:
+                    await ingest_document(ctx, job_id, document_id, project_id)
 
     assert job.status == JobStatus.FAILED.value
     assert job.error_message is not None
@@ -199,9 +201,10 @@ async def test_ingest_document_qdrant_upsert_failure_sets_failed() -> None:
     project_id = doc.project_id
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
-        with pytest.raises(QdrantError):
-            async with session:
-                await ingest_document(ctx, job_id, document_id, project_id)
+        with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+            with pytest.raises(QdrantError):
+                async with session:
+                    await ingest_document(ctx, job_id, document_id, project_id)
 
     assert job.status == JobStatus.FAILED.value
     assert job.error_message is not None
@@ -236,8 +239,9 @@ async def test_ingest_document_status_commits_in_correct_order() -> None:
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
         with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
-            async with session:
-                await ingest_document(ctx, job_id, document_id, project_id)
+            with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+                async with session:
+                    await ingest_document(ctx, job_id, document_id, project_id)
 
     assert JobStatus.RUNNING.value in statuses_after_each_commit
     assert JobStatus.COMPLETE.value in statuses_after_each_commit
@@ -269,11 +273,12 @@ async def test_ingest_document_uses_project_chunk_config() -> None:
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
         with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
             with patch("app.workers.ingest.chunk_text") as chunk_text_mock:
-                chunk_text_mock.return_value = [
-                    Chunk(text="hello", index=0, metadata={"filename": "test.md"}),
-                ]
-                async with session:
-                    await ingest_document(ctx, job_id, document_id, project_id)
+                with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+                    chunk_text_mock.return_value = [
+                        Chunk(text="hello", index=0, metadata={"filename": "test.md"}),
+                    ]
+                    async with session:
+                        await ingest_document(ctx, job_id, document_id, project_id)
 
     assert chunk_text_mock.call_args.kwargs["chunk_size"] == 256
     assert chunk_text_mock.call_args.kwargs["overlap"] == 32
@@ -304,8 +309,9 @@ async def test_ingest_document_binary_pdf_stored_and_parsed() -> None:
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
         with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
-            async with session:
-                await ingest_document(ctx, job.id, doc.id, doc.project_id)
+            with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+                async with session:
+                    await ingest_document(ctx, job.id, doc.id, doc.project_id)
 
     assert job.status == JobStatus.COMPLETE.value
     vector_store.upsert.assert_awaited_once()
@@ -324,13 +330,103 @@ async def test_ingest_document_contextual_strategy_raises_not_implemented() -> N
     ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
-        with pytest.raises(NotImplementedError):
-            async with session:
-                await ingest_document(ctx, job.id, doc.id, doc.project_id)
+        with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
+            with pytest.raises(NotImplementedError):
+                async with session:
+                    await ingest_document(ctx, job.id, doc.id, doc.project_id)
 
     assert job.status == JobStatus.FAILED.value
     assert job.error_message is not None
     assert "implement" in job.error_message.lower()
+
+
+# ---------------------------------------------------------------------------
+# CAG watermark trigger unit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_cag_service(
+    latest: MagicMock | None,
+    pending_count: int,
+) -> MagicMock:
+    service = MagicMock()
+    service.get_latest = AsyncMock(return_value=latest)
+    service.count_pending = AsyncMock(return_value=pending_count)
+    return service
+
+
+@pytest.mark.unit
+async def test_maybe_enqueue_cag_update_initial_state_enqueues_on_first_summary() -> None:
+    project = _make_mock_project()
+    mock_arq = AsyncMock()
+    mock_arq.enqueue_job.return_value = object()
+    ctx: dict[str, object] = {"redis": mock_arq}
+    session = _make_mock_session(project=project)
+
+    service = _make_mock_cag_service(latest=None, pending_count=1)
+
+    with patch("app.workers.ingest.CAGService", return_value=service):
+        await _maybe_enqueue_cag_update(ctx, session, project)
+
+    mock_arq.enqueue_job.assert_awaited_once()
+    call_args = mock_arq.enqueue_job.call_args
+    assert call_args.args[0] == "cag_update"
+    assert call_args.args[1] == project.id
+    assert call_args.kwargs.get("_job_id") == f"cag-update-{project.id}"
+
+
+@pytest.mark.unit
+async def test_maybe_enqueue_cag_update_below_threshold_does_not_enqueue() -> None:
+    project = _make_mock_project()
+    project.config = {"cag_rebuild_threshold": 5}
+    mock_arq = AsyncMock()
+    ctx: dict[str, object] = {"redis": mock_arq}
+    session = _make_mock_session(project=project)
+
+    latest = MagicMock()
+    latest.last_summary_created_at = None
+    service = _make_mock_cag_service(latest=latest, pending_count=3)
+
+    with patch("app.workers.ingest.CAGService", return_value=service):
+        await _maybe_enqueue_cag_update(ctx, session, project)
+
+    mock_arq.enqueue_job.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_maybe_enqueue_cag_update_at_threshold_enqueues() -> None:
+    project = _make_mock_project()
+    project.config = {"cag_rebuild_threshold": 5}
+    mock_arq = AsyncMock()
+    mock_arq.enqueue_job.return_value = object()
+    ctx: dict[str, object] = {"redis": mock_arq}
+    session = _make_mock_session(project=project)
+
+    latest = MagicMock()
+    latest.last_summary_created_at = None
+    service = _make_mock_cag_service(latest=latest, pending_count=5)
+
+    with patch("app.workers.ingest.CAGService", return_value=service):
+        await _maybe_enqueue_cag_update(ctx, session, project)
+
+    mock_arq.enqueue_job.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_maybe_enqueue_cag_update_already_queued_logs_and_skips() -> None:
+    project = _make_mock_project()
+    project.config = {"cag_rebuild_threshold": 5}
+    mock_arq = AsyncMock()
+    mock_arq.enqueue_job.return_value = None  # ARQ dedup: already queued
+    ctx: dict[str, object] = {"redis": mock_arq}
+    session = _make_mock_session(project=project)
+
+    service = _make_mock_cag_service(latest=None, pending_count=5)
+
+    with patch("app.workers.ingest.CAGService", return_value=service):
+        await _maybe_enqueue_cag_update(ctx, session, project)
+
+    mock_arq.enqueue_job.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +515,11 @@ async def test_ingest_document_full_pipeline() -> None:
             embedder = Embedder()
             vector_store = VectorStore(client=qdrant_client)
 
+            mock_arq = AsyncMock()
             ctx: dict[str, object] = {
                 "embedder": embedder,
                 "vector_store": vector_store,
+                "redis": mock_arq,
             }
 
             await ingest_document(ctx, job_id, document_id, project_id)
@@ -530,7 +628,12 @@ async def test_ingest_document_idempotent_on_retry() -> None:
         embedder = Embedder()
         qdrant_client = AsyncQdrantClient(url=settings.qdrant_url)
         vector_store = VectorStore(client=qdrant_client)
-        ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
+        mock_arq = AsyncMock()
+        ctx: dict[str, object] = {
+            "embedder": embedder,
+            "vector_store": vector_store,
+            "redis": mock_arq,
+        }
 
         summary_mock = {
             "summary": "Idempotency test.",
