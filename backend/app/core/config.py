@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     default_chunk_size: int = 512
     default_chunk_overlap: int = 64
     default_cag_rebuild_threshold: int = 50
+    cag_max_prompt_tokens: int = 100_000
     max_upload_size_mb: int = 50
     arq_max_jobs: int = 10
 

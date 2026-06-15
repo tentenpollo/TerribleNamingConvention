@@ -110,21 +110,21 @@
 
 | Task | Status |
 |---|---|
-| belief_states table and Alembic migration | ⬜ |
-| Belief state JSON schema defined and validated (Pydantic) | ⬜ |
+| belief_states table and Alembic migration | ✅ |
+| Belief state JSON schema defined and validated (Pydantic) | ✅ |
 | Initial belief state generation on first ingest | ✅ |
 | Incremental update — rolling window of recent summaries + current state | ✅ |
 | Threshold check after each ingest job | ✅ |
 | ARQ CAGUpdateJob | ✅ |
-| ARQ CAGRebuildJob — full Map-Reduce over all summaries | ⬜ |
-| Weekly cron rebuild via ARQ scheduler | ⬜ |
-| Manual rebuild endpoint POST /projects/{id}/cag/rebuild (admin only) | ⬜ |
-| Belief state read endpoint GET /projects/{id}/cag | ⬜ |
+| ARQ CAGRebuildJob — full Map-Reduce over all summaries | ✅ |
+| Weekly cron rebuild via ARQ scheduler | ✅ |
+| Manual rebuild endpoint POST /projects/{id}/cag/rebuild (admin only) | ✅ |
+| Belief state read endpoint GET /projects/{id}/cag | ✅ |
 | Tests: belief state created on first ingest | ✅ |
 | Tests: incremental update produces valid state shape | ✅ |
-| Tests: full rebuild from scratch matches incremental state | ⬜ |
-| Tests: old versions preserved in DB after rebuild | ⬜ |
-| Tests: manual rebuild is admin-only | ⬜ |
+| Tests: full rebuild from scratch matches incremental state | ✅ |
+| Tests: old versions preserved in DB after rebuild | ✅ |
+| Tests: manual rebuild is admin-only | ✅ |
 
 **Done when:** A project's belief state accurately reflects its ingested documents and can be rebuilt cleanly from the event log.
 

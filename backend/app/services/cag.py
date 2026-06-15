@@ -41,6 +41,20 @@ class CAGService:
             return None
         return _to_record(row)
 
+    async def get_latest_full(self, project_id: uuid.UUID) -> BeliefStateRecord | None:
+        """Return the most recent belief state with rebuild_type='full', if any."""
+        result = await self.session.execute(
+            select(BeliefState)
+            .where(BeliefState.project_id == project_id)
+            .where(BeliefState.rebuild_type == "full")
+            .order_by(BeliefState.version.desc())
+            .limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        return _to_record(row)
+
     async def list_versions(self, project_id: uuid.UUID) -> list[BeliefStateVersionMeta]:
         result = await self.session.execute(
             select(
@@ -90,6 +104,10 @@ class CAGService:
 
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_all_summaries(self, project_id: uuid.UUID) -> list[DocumentSummary]:
+        """Return every non-fallback summary for the project in chronological order."""
+        return await self.get_window_since(project_id, None)
 
     async def synthesize_and_insert(
         self,
@@ -155,6 +173,89 @@ class CAGService:
 
         await self.session.refresh(row)
         return _to_record(row), remaining
+
+    async def rebuild(
+        self,
+        project_id: uuid.UUID,
+        rebuild_fn: Callable[
+            [BeliefStateContent | None, list[DocumentSummary]],
+            Awaitable[BeliefStateContent],
+        ],
+        mode: Literal["compaction", "genesis"],
+        batch_size: int = 40,
+    ) -> tuple[BeliefStateRecord, BeliefStateRecord | None] | None:
+        """Rebuild a project's belief state from the event log.
+
+        Holds a transaction-scoped advisory lock across read-synthesize-insert to
+        serialize belief-state writes per project and ensure a rebuild does not
+        interleave with an incremental update.
+
+        For compaction, the latest full state is used as the initial accumulator
+        and only summaries newer than its watermark are consumed. If no full state
+        exists, compaction degrades to genesis.
+
+        Returns the newly inserted record and the previous latest record (any type)
+        for drift instrumentation.
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        previous_latest: BeliefStateRecord | None = None
+
+        async with self.session.begin():
+            await self.session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": f"cag:{project_id}"},
+            )
+
+            previous_latest = await self.get_latest(project_id)
+
+            if mode == "compaction":
+                latest_full = await self.get_latest_full(project_id)
+                if latest_full is not None:
+                    accumulator = latest_full.state
+                    watermark = latest_full.last_summary_created_at
+                    prior_count = latest_full.summary_count_covered
+                    summaries = await self.get_window_since(project_id, watermark)
+                else:
+                    accumulator = None
+                    watermark = None
+                    prior_count = 0
+                    summaries = await self.get_all_summaries(project_id)
+            else:  # genesis
+                accumulator = None
+                watermark = None
+                prior_count = 0
+                summaries = await self.get_all_summaries(project_id)
+
+            if not summaries:
+                return None
+
+            content = await rebuild_fn(accumulator, summaries)
+            if not isinstance(content, BeliefStateContent):
+                raise TypeError("rebuild_fn must return a BeliefStateContent instance")
+
+            max_version_result = await self.session.execute(
+                select(func.max(BeliefState.version)).where(BeliefState.project_id == project_id)
+            )
+            current_max = max_version_result.scalar_one_or_none()
+            next_version = (current_max or 0) + 1
+
+            last_summary_created_at = max(summary.created_at for summary in summaries)
+            summary_count_covered = prior_count + len(summaries)
+
+            row = BeliefState(
+                project_id=project_id,
+                version=next_version,
+                state=content.model_dump(),
+                rebuild_type="full",
+                last_summary_created_at=last_summary_created_at,
+                summary_count_covered=summary_count_covered,
+            )
+            self.session.add(row)
+
+        await self.session.refresh(row)
+        return _to_record(row), previous_latest
 
     async def count_pending(
         self,

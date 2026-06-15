@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -71,3 +71,12 @@ class BeliefStateVersionMeta(BaseModel):
     rebuild_type: str
     created_at: datetime
     summary_count_covered: int
+
+
+class RebuildRequest(BaseModel):
+    mode: Literal["compaction", "genesis"] = "compaction"
+
+
+class RebuildResponse(BaseModel):
+    queued: bool
+    deduplicated: bool

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import json
 from unittest.mock import AsyncMock, patch
 import uuid
 
@@ -23,7 +24,7 @@ from app.models.project import Project
 from app.models.team import Team
 from app.schemas.belief_state import BeliefStateContent
 from app.services.cag import CAGService
-from app.workers.cag import cag_update
+from app.workers.cag import cag_rebuild, cag_update
 from app.workers.ingest import ingest_document
 
 
@@ -492,6 +493,118 @@ async def test_fallback_only_summaries_never_trigger_insert(cag_project) -> None
             rows = list(result.scalars().all())
 
         assert len(rows) == 0
+
+    finally:
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(delete(BeliefState).where(BeliefState.project_id == project_id))
+            await session.execute(
+                delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+            )
+            await session.execute(delete(Document).where(Document.project_id == project_id))
+            await session.execute(delete(Project).where(Project.id == project_id))
+            await session.execute(delete(Team).where(Team.id == team_id))
+            await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Integration: CAG rebuild job
+# ---------------------------------------------------------------------------
+
+
+_DETERMINISTIC_BELIEF_STATE_JSON = (
+    '{"project_summary": "Union of inputs.", '
+    '"decisions": [], "open_items": [], '
+    '"key_people": [], "recurring_themes": []}'
+)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio(loop_scope="function")
+async def test_genesis_rebuild_on_120_summaries(cag_project) -> None:
+    """Genesis rebuild over 120 seeded summaries produces one full belief-state row."""
+    project_id = cag_project["project_id"]
+    team_id = cag_project["team_id"]
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            latest_created_at: datetime | None = None
+            for i in range(120):
+                doc_id = uuid.uuid4()
+                summary_id = uuid.uuid4()
+                created_at = datetime.now(UTC) + timedelta(seconds=i)
+                latest_created_at = created_at
+                await session.execute(
+                    text(
+                        "INSERT INTO documents "
+                        "(id, project_id, filename, file_type, raw_bytes) "
+                        "VALUES (:id, :pid, :fn, 'txt', '')"
+                    ),
+                    {"id": doc_id, "pid": project_id, "fn": f"seed-{i}.txt"},
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO document_summaries "
+                        "(id, document_id, project_id, summary, created_at) "
+                        "VALUES (:id, :doc_id, :pid, CAST(:summary AS jsonb), :created_at)"
+                    ),
+                    {
+                        "id": summary_id,
+                        "doc_id": doc_id,
+                        "pid": project_id,
+                        "summary": json.dumps({"text": f"summary {i}"}),
+                        "created_at": created_at,
+                    },
+                )
+            await session.commit()
+
+        # Seed an older incremental version so we can verify prior versions survive.
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO belief_states "
+                    "(project_id, version, state, rebuild_type, "
+                    "last_summary_created_at, summary_count_covered) "
+                    "VALUES (:pid, 1, CAST(:state AS jsonb), 'incremental', now(), 1)"
+                ),
+                {
+                    "pid": project_id,
+                    "state": _DETERMINISTIC_BELIEF_STATE_JSON,
+                },
+            )
+            await session.commit()
+
+        embedder = Embedder()
+        mock_arq = AsyncMock()
+        ctx: dict[str, object] = {
+            "embedder": embedder,
+            "redis": mock_arq,
+        }
+
+        with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch(
+                "app.workers.cag.llm_call",
+                return_value=_DETERMINISTIC_BELIEF_STATE_JSON,
+            ):
+                await cag_rebuild(ctx, project_id, "genesis")
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BeliefState)
+                .where(BeliefState.project_id == project_id)
+                .order_by(BeliefState.version.desc())
+            )
+            rows = list(result.scalars().all())
+
+            assert len(rows) == 2
+            full_row = rows[0]
+            assert full_row.rebuild_type == "full"
+            assert full_row.summary_count_covered == 120
+            assert full_row.last_summary_created_at == latest_created_at
+
+            service = CAGService(session)
+            versions = await service.list_versions(project_id)
+            assert len(versions) == 2
+            assert {v.rebuild_type for v in versions} == {"incremental", "full"}
 
     finally:
         async with database.AsyncSessionLocal() as session:

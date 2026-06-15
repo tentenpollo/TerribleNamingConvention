@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from app.models.document_summary import DocumentSummary
+from app.schemas.belief_state import BeliefStateContent
 
 _CAP_INSTRUCTIONS = (
     "Strict schema caps (enforce these exactly):\n"
@@ -117,3 +118,61 @@ def format_incremental_prompt(
         current_state=json.dumps(current_state, indent=2, default=str),
         window=formatted_window,
     )
+
+
+_BATCH_DIGEST_BODY = (
+    "You are producing an intermediate digest for a hierarchical project belief-state "
+    "rebuild.\n\n"
+    "Given the following batch of document summaries, produce a single JSON object matching "
+    "the exact schema below. This digest will later be merged with other digests, so it must "
+    "be dense and self-contained.\n\n"
+    "Rules for this digest:\n"
+    "1. Capture all decisions, open items, key people, and recurring themes from the batch.\n"
+    "2. Do not invent information not present in the summaries.\n"
+    "3. Carry the summary id of the source summary as summary_id_ref for decisions and "
+    "first_seen_summary_id for open_items whenever applicable.\n"
+    "4. Resolve contradictions inside this batch by preferring the LATER in-content date; "
+    "use document filename dates or decision approximate_date when present. "
+    "If no in-content date exists, prefer the later event-log entry (later created_at / "
+    "newer summary). Drop superseded entries; do not keep both.\n"
+    "5. Return ONLY valid JSON. No markdown, no explanations, no code fences.\n\n"
+    "Document summaries (in chronological order):\n"
+    "{summaries}\n\n"
+    "Output JSON:"
+)
+
+BATCH_DIGEST_PROMPT = _BATCH_DIGEST_BODY + "\n" + _CAP_INSTRUCTIONS
+
+
+_DIGEST_MERGE_BODY = (
+    "You are merging intermediate digests during a hierarchical project belief-state rebuild.\n\n"
+    "Given the following chronologically-ordered intermediate digests, produce a single merged "
+    "JSON object matching the exact schema below.\n\n"
+    "Rules for merging:\n"
+    "1. Combine all decisions, open items, key people, and recurring themes from the digests.\n"
+    "2. The digests are provided in chronological order (earliest first, latest last). "
+    "LATER digests supersede EARLIER digests on conflict.\n"
+    "3. Match entries by summary_id_ref when present, otherwise by case-insensitive "
+    "description equality.\n"
+    "4. Do not invent information not present in the digests.\n"
+    "5. Return ONLY valid JSON. No markdown, no explanations, no code fences.\n\n"
+    "Intermediate digests (in chronological order):\n"
+    "{digests}\n\n"
+    "Output JSON:"
+)
+
+DIGEST_MERGE_PROMPT = _DIGEST_MERGE_BODY + "\n" + _CAP_INSTRUCTIONS
+
+
+def format_batch_digest_prompt(summaries: list[DocumentSummary]) -> str:
+    if not summaries:
+        raise ValueError("At least one summary is required for batch digest")
+    formatted = "\n\n".join(_format_summary(s) for s in summaries)
+    return BATCH_DIGEST_PROMPT.format(summaries=formatted)
+
+
+def format_digest_merge_prompt(digests: list[BeliefStateContent]) -> str:
+    if not digests:
+        raise ValueError("At least one digest is required for merge")
+    formatted = "\n\n".join(json.dumps(d.model_dump(), indent=2, default=str) for d in digests)
+    return DIGEST_MERGE_PROMPT.format(digests=formatted)

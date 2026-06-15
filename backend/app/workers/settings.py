@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.ingestion.embedder import Embedder
 from app.ingestion.vector_store import VectorStore
-from app.workers.cag import cag_update
+from app.workers.cag import cag_rebuild, cag_update, cag_weekly_rebuild
 from app.workers.ingest import ingest_document, sweep_pending_jobs
 
 
@@ -34,8 +34,13 @@ class WorkerSettings:
         ingest_document,
         sweep_pending_jobs,
         cag_update,
+        cag_rebuild,
+        cag_weekly_rebuild,
     ]
-    cron_jobs: ClassVar[list[Any]] = [cron(sweep_pending_jobs, minute=set(range(0, 60, 5)))]
+    cron_jobs: ClassVar[list[Any]] = [
+        cron(sweep_pending_jobs, minute=set(range(0, 60, 5))),
+        cron(cag_weekly_rebuild, weekday=6, hour=3, minute=0),
+    ]
     max_jobs: ClassVar[int] = settings.arq_max_jobs
     on_startup: ClassVar[Callable[..., Any]] = on_startup
     on_shutdown: ClassVar[Callable[..., Any]] = on_shutdown
