@@ -5,10 +5,11 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from qdrant_client.http.models import SparseVector
 
 from app.core.exceptions import QdrantError
 from app.ingestion.chunker import Chunk
-from app.ingestion.embedder import EmbeddingResult
+from app.ingestion.embedder import EmbeddingResult, SparseEmbeddingResult
 from app.ingestion.vector_store import VectorStore, collection_name
 
 
@@ -58,6 +59,20 @@ def sample_embedding_results() -> list[EmbeddingResult]:
         EmbeddingResult(
             chunk=Chunk(text="goodbye world", index=1, metadata={"filename": "test.md"}),
             vector=[0.2] * 384,
+        ),
+    ]
+
+
+@pytest.fixture
+def sample_sparse_embedding_results() -> list[SparseEmbeddingResult]:
+    return [
+        SparseEmbeddingResult(
+            chunk=Chunk(text="hello world", index=0, metadata={"filename": "test.md"}),
+            vector=SparseVector(indices=[1, 2], values=[0.1, 0.2]),
+        ),
+        SparseEmbeddingResult(
+            chunk=Chunk(text="goodbye world", index=1, metadata={"filename": "test.md"}),
+            vector=SparseVector(indices=[3, 4], values=[0.3, 0.4]),
         ),
     ]
 
@@ -177,6 +192,87 @@ async def test_upsert_raises_qdrant_error_on_failure(
 
     with pytest.raises(QdrantError, match="Failed to upsert"):
         await store.upsert(project_a, sample_embedding_results, document_id)
+
+
+@pytest.mark.unit
+async def test_upsert_includes_sparse_vectors_when_provided(
+    store: VectorStore,
+    mock_client: AsyncMock,
+    project_a: uuid.UUID,
+    document_id: uuid.UUID,
+    sample_embedding_results: list[EmbeddingResult],
+    sample_sparse_embedding_results: list[SparseEmbeddingResult],
+) -> None:
+    mock_client.collection_exists.return_value = True
+
+    await store.upsert(
+        project_a,
+        sample_embedding_results,
+        document_id,
+        sample_sparse_embedding_results,
+    )
+
+    point = mock_client.upsert.call_args[1]["points"][0]
+    assert "dense" in point.vector
+    assert "bm25" in point.vector
+
+
+@pytest.mark.unit
+async def test_hybrid_search_returns_empty_when_collection_missing(
+    store: VectorStore,
+    mock_client: AsyncMock,
+    project_a: uuid.UUID,
+) -> None:
+    mock_client.collection_exists.return_value = False
+
+    result = await store.hybrid_search(
+        project_a,
+        dense_query=[0.1] * 384,
+        sparse_query=SparseVector(indices=[1], values=[0.5]),
+        top_k=5,
+    )
+
+    assert result == []
+
+
+@pytest.mark.unit
+async def test_hybrid_search_returns_points_when_collection_exists(
+    store: VectorStore,
+    mock_client: AsyncMock,
+    project_a: uuid.UUID,
+) -> None:
+    mock_client.collection_exists.return_value = True
+    mock_response = AsyncMock()
+    mock_response.points = [AsyncMock(score=0.95), AsyncMock(score=0.85)]
+    mock_client.query_points.return_value = mock_response
+
+    result = await store.hybrid_search(
+        project_a,
+        dense_query=[0.1] * 384,
+        sparse_query=SparseVector(indices=[1], values=[0.5]),
+        top_k=2,
+    )
+
+    assert len(result) == 2
+    call_kwargs = mock_client.query_points.call_args[1]
+    assert len(call_kwargs["prefetch"]) == 2
+    assert call_kwargs["query"].fusion == "rrf"
+
+
+@pytest.mark.unit
+async def test_hybrid_search_raises_qdrant_error_on_failure(
+    store: VectorStore,
+    mock_client: AsyncMock,
+    project_a: uuid.UUID,
+) -> None:
+    mock_client.collection_exists.side_effect = Exception("hybrid search failed")
+
+    with pytest.raises(QdrantError, match="Failed to hybrid search"):
+        await store.hybrid_search(
+            project_a,
+            dense_query=[0.1] * 384,
+            sparse_query=SparseVector(indices=[1], values=[0.5]),
+        )
 
 
 @pytest.mark.unit

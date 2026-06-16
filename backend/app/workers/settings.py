@@ -9,15 +9,17 @@ from qdrant_client import AsyncQdrantClient
 
 from app.core.config import settings
 from app.core.logging import logger
-from app.ingestion.embedder import Embedder
+from app.ingestion.embedder import Embedder, SparseEmbedder
 from app.ingestion.vector_store import VectorStore
 from app.workers.cag import cag_rebuild, cag_update, cag_weekly_rebuild
 from app.workers.ingest import ingest_document, sweep_pending_jobs
+from app.workers.maintenance import reindex_project
 
 
 async def on_startup(ctx: dict[str, Any]) -> None:
     logger.info("ARQ worker starting")
     ctx["embedder"] = Embedder()
+    ctx["sparse_embedder"] = SparseEmbedder()
     ctx["vector_store"] = VectorStore(client=AsyncQdrantClient(url=settings.qdrant_url))
 
 
@@ -33,6 +35,7 @@ class WorkerSettings:
     functions: ClassVar[list[Callable[..., Any]]] = [
         ingest_document,
         sweep_pending_jobs,
+        reindex_project,
         cag_update,
         cag_rebuild,
         cag_weekly_rebuild,

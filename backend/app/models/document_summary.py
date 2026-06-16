@@ -6,9 +6,10 @@ import uuid
 
 from sqlalchemy import ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.document import Document
 
 
 class DocumentSummary(Base):
@@ -28,6 +29,7 @@ class DocumentSummary(Base):
         ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
     )
+    document: Mapped[Document] = relationship("Document")
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),

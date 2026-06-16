@@ -14,7 +14,7 @@ from sqlalchemy import delete, select, text
 from app.core import database
 from app.core.config import settings
 from app.core.exceptions import BeliefStateVersionConflictError, InvalidBeliefStateError
-from app.ingestion.embedder import Embedder
+from app.ingestion.embedder import Embedder, SparseEmbedder
 from app.ingestion.vector_store import VectorStore
 from app.models.belief_state import BeliefState
 from app.models.document import Document, FileType
@@ -289,6 +289,7 @@ async def test_first_document_ingest_creates_belief_state_v1(cag_project) -> Non
             job_id = job.id
 
         embedder = Embedder()
+        sparse_embedder = SparseEmbedder()
         vector_store = VectorStore(client=qdrant_client)
 
         mock_arq = AsyncMock()
@@ -296,6 +297,7 @@ async def test_first_document_ingest_creates_belief_state_v1(cag_project) -> Non
 
         ctx: dict[str, object] = {
             "embedder": embedder,
+            "sparse_embedder": sparse_embedder,
             "vector_store": vector_store,
             "redis": mock_arq,
         }
@@ -380,6 +382,7 @@ async def test_concurrent_ingest_triggers_single_cag_version(cag_project) -> Non
             await session.commit()
 
         embedder = Embedder()
+        sparse_embedder = SparseEmbedder()
         vector_store = VectorStore(client=qdrant_client)
 
         # Pre-create the collection so concurrent upserts do not race on creation.
@@ -390,6 +393,7 @@ async def test_concurrent_ingest_triggers_single_cag_version(cag_project) -> Non
 
         ctx: dict[str, object] = {
             "embedder": embedder,
+            "sparse_embedder": sparse_embedder,
             "vector_store": vector_store,
             "redis": mock_arq,
         }
@@ -516,6 +520,126 @@ _DETERMINISTIC_BELIEF_STATE_JSON = (
     '"decisions": [], "open_items": [], '
     '"key_people": [], "recurring_themes": []}'
 )
+
+
+_DETERMINISTIC_OPEN_ITEM_STATE = (
+    '{"project_summary": "Open item tracked.", '
+    '"decisions": [], '
+    '"open_items": [{"description": "Need API spec", "first_seen_summary_id": null}], '
+    '"key_people": [], "recurring_themes": []}'
+)
+
+
+_DETERMINISTIC_RESOLVED_STATE = (
+    '{"project_summary": "Open item resolved.", '
+    '"decisions": [], "open_items": [], '
+    '"key_people": [], "recurring_themes": []}'
+)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio(loop_scope="function")
+async def test_genesis_rebuild_closes_explicitly_resolved_open_item(cag_project) -> None:
+    """A genesis rebuild closes an open item when a later summary explicitly resolves it."""
+    project_id = cag_project["project_id"]
+    team_id = cag_project["team_id"]
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            early_doc_id = uuid.uuid4()
+            early_summary_id = uuid.uuid4()
+            early_created_at = datetime.now(UTC)
+            await session.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(id, project_id, filename, file_type, raw_bytes) "
+                    "VALUES (:id, :pid, :fn, 'txt', '')"
+                ),
+                {"id": early_doc_id, "pid": project_id, "fn": "early.txt"},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO document_summaries "
+                    "(id, document_id, project_id, summary, created_at) "
+                    "VALUES (:id, :doc_id, :pid, CAST(:summary AS jsonb), :created_at)"
+                ),
+                {
+                    "id": early_summary_id,
+                    "doc_id": early_doc_id,
+                    "pid": project_id,
+                    "summary": json.dumps({"text": "We still need an API spec."}),
+                    "created_at": early_created_at,
+                },
+            )
+
+            later_doc_id = uuid.uuid4()
+            later_summary_id = uuid.uuid4()
+            later_created_at = early_created_at + timedelta(seconds=1)
+            await session.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(id, project_id, filename, file_type, raw_bytes) "
+                    "VALUES (:id, :pid, :fn, 'txt', '')"
+                ),
+                {"id": later_doc_id, "pid": project_id, "fn": "later.txt"},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO document_summaries "
+                    "(id, document_id, project_id, summary, created_at) "
+                    "VALUES (:id, :doc_id, :pid, CAST(:summary AS jsonb), :created_at)"
+                ),
+                {
+                    "id": later_summary_id,
+                    "doc_id": later_doc_id,
+                    "pid": project_id,
+                    "summary": json.dumps(
+                        {"text": "The API spec has been finalized and approved."}
+                    ),
+                    "created_at": later_created_at,
+                },
+            )
+            await session.commit()
+
+        async def resolve_open_item(*args: object, **kwargs: object) -> str:
+            messages = kwargs.get("messages", args[0] if args else [])
+            content = messages[-1]["content"] if messages else ""
+            if "API spec has been finalized" in content:
+                return _DETERMINISTIC_RESOLVED_STATE
+            return _DETERMINISTIC_OPEN_ITEM_STATE
+
+        mock_arq = AsyncMock()
+        ctx: dict[str, object] = {"redis": mock_arq}
+
+        with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
+            with patch("app.workers.cag.llm_call", side_effect=resolve_open_item):
+                await cag_rebuild(ctx, project_id, "genesis")
+
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(BeliefState)
+                .where(BeliefState.project_id == project_id)
+                .order_by(BeliefState.version.desc())
+            )
+            rows = list(result.scalars().all())
+
+            assert len(rows) == 1
+            full_row = rows[0]
+            assert full_row.rebuild_type == "full"
+            assert full_row.summary_count_covered == 2
+            state = BeliefStateContent.model_validate(full_row.state)
+            assert state.open_items == []
+
+    finally:
+        async with database.AsyncSessionLocal() as session:
+            await session.execute(delete(BeliefState).where(BeliefState.project_id == project_id))
+            await session.execute(
+                delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
+            )
+            await session.execute(delete(Document).where(Document.project_id == project_id))
+            await session.execute(delete(Project).where(Project.id == project_id))
+            await session.execute(delete(Team).where(Team.id == team_id))
+            await session.commit()
 
 
 @pytest.mark.integration

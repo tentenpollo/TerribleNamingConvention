@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.logging import logger
 from app.ingestion.chunker import ChunkingStrategy, chunk_text
-from app.ingestion.embedder import Embedder
+from app.ingestion.embedder import Embedder, EmbeddingResult, SparseEmbedder, SparseEmbeddingResult
 from app.ingestion.parser import parse_file
 from app.ingestion.summarizer import summarize_document
 from app.ingestion.vector_store import VectorStore
@@ -31,9 +31,6 @@ async def ingest_document(
     document_id: uuid.UUID,
     project_id: uuid.UUID,
 ) -> None:
-    embedder = cast(Embedder, ctx["embedder"])
-    vector_store = cast(VectorStore, ctx["vector_store"])
-
     async with AsyncSessionLocal() as session:
         try:
             job = await _fetch_job(session, job_id)
@@ -43,32 +40,22 @@ async def ingest_document(
             doc = await _fetch_document(session, document_id)
             project = await _fetch_project(session, project_id)
 
-            parsed_text = parse_file(
-                content=doc.raw_bytes,
-                file_type=doc.file_type,
+            embedding_results, sparse_embedding_results = await _index_document(
+                ctx,
+                doc,
+                project,
             )
-
-            chunk_size = project.config.get("chunk_size", settings.default_chunk_size)
-            chunk_overlap = project.config.get("chunk_overlap", settings.default_chunk_overlap)
-            strategy = ChunkingStrategy(
-                project.config.get("chunking_strategy", settings.default_chunking_strategy)
+            vector_store = cast(VectorStore, ctx["vector_store"])
+            await vector_store.upsert(
+                project_id,
+                embedding_results,
+                document_id,
+                sparse_embedding_results,
             )
-            chunks = chunk_text(
-                text=parsed_text,
-                strategy=strategy,
-                chunk_size=chunk_size,
-                overlap=chunk_overlap,
-            )
-            for chunk in chunks:
-                chunk.metadata["filename"] = doc.filename
-
-            embedding_results = await asyncio.to_thread(embedder.embed, chunks)
-
-            await vector_store.upsert(project_id, embedding_results, document_id)
 
             context_model = project.config.get("context_model", settings.litellm_context_model)
             summary_dict = await summarize_document(
-                text=parsed_text,
+                text=parse_file(content=doc.raw_bytes, file_type=doc.file_type),
                 filename=doc.filename,
                 model=context_model,
             )
@@ -96,7 +83,7 @@ async def ingest_document(
                 job_id=str(job_id),
                 document_id=str(document_id),
                 project_id=str(project_id),
-                chunk_count=len(chunks),
+                chunk_count=len(embedding_results),
             )
 
         except Exception as exc:
@@ -109,6 +96,44 @@ async def ingest_document(
                 error=str(exc),
             )
             raise
+
+
+async def _index_document(
+    ctx: dict[str, object],
+    doc: Document,
+    project: Project,
+) -> tuple[list[EmbeddingResult], list[SparseEmbeddingResult]]:
+    """Parse, chunk, and (dense + sparse) embed a single document.
+
+    This is the shared indexing code path used by both ingest_document and the
+    reindex_project maintenance job so there is exactly one way raw bytes become
+    vectors in Qdrant.
+    """
+    embedder = cast(Embedder, ctx["embedder"])
+    sparse_embedder = cast(SparseEmbedder, ctx["sparse_embedder"])
+
+    parsed_text = parse_file(content=doc.raw_bytes, file_type=doc.file_type)
+
+    chunk_size = project.config.get("chunk_size", settings.default_chunk_size)
+    chunk_overlap = project.config.get("chunk_overlap", settings.default_chunk_overlap)
+    strategy = ChunkingStrategy(
+        project.config.get("chunking_strategy", settings.default_chunking_strategy)
+    )
+    chunks = chunk_text(
+        text=parsed_text,
+        strategy=strategy,
+        chunk_size=chunk_size,
+        overlap=chunk_overlap,
+    )
+    for chunk in chunks:
+        chunk.metadata["filename"] = doc.filename
+
+    embedding_results, sparse_embedding_results = await asyncio.gather(
+        asyncio.to_thread(embedder.embed, chunks),
+        asyncio.to_thread(sparse_embedder.embed, chunks),
+    )
+
+    return embedding_results, sparse_embedding_results
 
 
 async def sweep_pending_jobs(ctx: dict[str, object]) -> None:

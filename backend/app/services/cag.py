@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import (
     BeliefStateNotFoundError,
@@ -95,6 +96,7 @@ class CAGService:
 
         stmt = (
             select(DocumentSummary)
+            .options(selectinload(DocumentSummary.document))
             .where(DocumentSummary.project_id == project_id)
             .where(not_fallback)
             .order_by(DocumentSummary.created_at.asc())

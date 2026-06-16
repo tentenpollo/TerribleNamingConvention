@@ -91,9 +91,11 @@ INCREMENTAL_UPDATE_PROMPT = (
 
 
 def _format_summary(summary: DocumentSummary) -> str:
+    document = getattr(summary, "document", None)
+    filename = document.filename if document is not None else "unknown"
     header = (
         f"--- summary id: {summary.id} | "
-        f"filename: {summary.summary.get('filename', 'unknown')} | "
+        f"filename: {filename} | "
         f"created_at: {summary.created_at.isoformat()} ---"
     )
     body = json.dumps(summary.summary, indent=2, default=str)
@@ -135,7 +137,8 @@ _BATCH_DIGEST_BODY = (
     "use document filename dates or decision approximate_date when present. "
     "If no in-content date exists, prefer the later event-log entry (later created_at / "
     "newer summary). Drop superseded entries; do not keep both.\n"
-    "5. Return ONLY valid JSON. No markdown, no explanations, no code fences.\n\n"
+    "5. Close (remove) open_items that the batch explicitly shows as resolved.\n"
+    "6. Return ONLY valid JSON. No markdown, no explanations, no code fences.\n\n"
     "Document summaries (in chronological order):\n"
     "{summaries}\n\n"
     "Output JSON:"
@@ -152,10 +155,13 @@ _DIGEST_MERGE_BODY = (
     "1. Combine all decisions, open items, key people, and recurring themes from the digests.\n"
     "2. The digests are provided in chronological order (earliest first, latest last). "
     "LATER digests supersede EARLIER digests on conflict.\n"
-    "3. Match entries by summary_id_ref when present, otherwise by case-insensitive "
-    "description equality.\n"
-    "4. Do not invent information not present in the digests.\n"
-    "5. Return ONLY valid JSON. No markdown, no explanations, no code fences.\n\n"
+    "3. Match entries by summary_id_ref when present. Otherwise, match only when both "
+    "case-insensitive description AND approximate_date are equal. Treat entries with "
+    "different dates or no matching ref as distinct.\n"
+    "4. Close (remove) open_items from earlier digests that later digests explicitly show "
+    "as resolved.\n"
+    "5. Do not invent information not present in the digests.\n"
+    "6. Return ONLY valid JSON. No markdown, no explanations, no code fences.\n\n"
     "Intermediate digests (in chronological order):\n"
     "{digests}\n\n"
     "Output JSON:"

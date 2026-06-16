@@ -375,8 +375,16 @@ Chunks stored with payload:
   "created_at": "ISO8601"
 }
 ```
-Collections are created with a named dense vector (384, cosine) and sparse_vectors_config declared at creation — Qdrant cannot add sparse vectors to an existing collection, and Phase 4 hybrid retrieval requires them.
-Collections created before schema v2 must be deleted and their documents re-uploaded.
+Collections are created with two named vectors:
+
+- `dense` — 384-dimensional cosine vector from the dense embedder (`BAAI/bge-small-en-v1.5`).
+- `bm25` — sparse BM25 vector with `modifier=IDF`, populated by `SparseEmbedder("Qdrant/bm25")`.
+
+Both vectors are declared at collection creation because Qdrant cannot add sparse vectors to an existing collection. The payload shape is unchanged.
+
+Hybrid retrieval fuses the two signals with Reciprocal Rank Fusion (RRF): each query produces a dense vector and a sparse `bm25` vector, both are searched with `limit=top_k*3`, and the results are merged by Qdrant's `Fusion.RRF`.
+
+Legacy collections (pre-v2 or pre-sparse) can be upgraded without re-uploading files by enqueueing the `reindex_project` ARQ maintenance job with `_job_id=f"reindex-{project_id}"`. The job deletes the old collection, recreates it with the current schema, and re-indexes every document from the Postgres `documents` table.
 ---
 
 ## Access Control Architecture

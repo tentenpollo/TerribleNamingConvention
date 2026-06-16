@@ -4,10 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 import pytest
+from qdrant_client.http.models import SparseVector
 
 from app.core.exceptions import QdrantError, UnsupportedFileTypeError
 from app.ingestion.chunker import Chunk
-from app.ingestion.embedder import EmbeddingResult
+from app.ingestion.embedder import EmbeddingResult, SparseEmbeddingResult
 from app.models.document import Document, FileType
 from app.models.ingestion_job import IngestionJob, JobStatus
 from app.models.project import Project
@@ -113,6 +114,18 @@ def _make_mock_embedder() -> MagicMock:
     return embedder
 
 
+def _make_mock_sparse_embedder() -> MagicMock:
+    sparse_embedder = MagicMock()
+    chunk = Chunk(text="hello world", index=0, metadata={"filename": "test.md"})
+    sparse_embedder.embed.return_value = [
+        SparseEmbeddingResult(
+            chunk=chunk,
+            vector=SparseVector(indices=[1, 2], values=[0.5, 0.5]),
+        ),
+    ]
+    return sparse_embedder
+
+
 def _make_mock_vector_store() -> AsyncMock:
     return AsyncMock()
 
@@ -129,6 +142,7 @@ async def test_ingest_document_happy_path_sets_complete() -> None:
 
     ctx: dict[str, object] = {
         "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
         "vector_store": vector_store,
     }
 
@@ -162,6 +176,7 @@ async def test_ingest_document_parse_failure_sets_failed() -> None:
 
     ctx: dict[str, object] = {
         "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
         "vector_store": vector_store,
     }
 
@@ -193,6 +208,7 @@ async def test_ingest_document_qdrant_upsert_failure_sets_failed() -> None:
 
     ctx: dict[str, object] = {
         "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
         "vector_store": vector_store,
     }
 
@@ -230,6 +246,7 @@ async def test_ingest_document_status_commits_in_correct_order() -> None:
 
     ctx: dict[str, object] = {
         "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
         "vector_store": vector_store,
     }
 
@@ -263,6 +280,7 @@ async def test_ingest_document_uses_project_chunk_config() -> None:
 
     ctx: dict[str, object] = {
         "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
         "vector_store": vector_store,
     }
 
@@ -305,7 +323,11 @@ async def test_ingest_document_binary_pdf_stored_and_parsed() -> None:
     embedder = _make_mock_embedder()
     vector_store = _make_mock_vector_store()
 
-    ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
+    ctx: dict[str, object] = {
+        "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
+        "vector_store": vector_store,
+    }
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
         with patch("app.workers.ingest.summarize_document", return_value=_SUMMARY_MOCK_RETURN):
@@ -327,7 +349,11 @@ async def test_ingest_document_contextual_strategy_raises_not_implemented() -> N
     embedder = _make_mock_embedder()
     vector_store = _make_mock_vector_store()
 
-    ctx: dict[str, object] = {"embedder": embedder, "vector_store": vector_store}
+    ctx: dict[str, object] = {
+        "embedder": embedder,
+        "sparse_embedder": _make_mock_sparse_embedder(),
+        "vector_store": vector_store,
+    }
 
     with patch("app.workers.ingest.AsyncSessionLocal", return_value=session):
         with patch("app.workers.ingest._maybe_enqueue_cag_update", return_value=None):
@@ -443,7 +469,7 @@ async def test_ingest_document_full_pipeline() -> None:
 
     from app.core import database
     from app.core.config import settings
-    from app.ingestion.embedder import Embedder
+    from app.ingestion.embedder import Embedder, SparseEmbedder
     from app.ingestion.vector_store import VectorStore
     from app.models.document_summary import DocumentSummary
     from app.models.project import Project
@@ -513,11 +539,13 @@ async def test_ingest_document_full_pipeline() -> None:
                 team_id = team.id
 
             embedder = Embedder()
+            sparse_embedder = SparseEmbedder()
             vector_store = VectorStore(client=qdrant_client)
 
             mock_arq = AsyncMock()
             ctx: dict[str, object] = {
                 "embedder": embedder,
+                "sparse_embedder": sparse_embedder,
                 "vector_store": vector_store,
                 "redis": mock_arq,
             }
@@ -579,7 +607,7 @@ async def test_ingest_document_idempotent_on_retry() -> None:
 
     from app.core import database
     from app.core.config import settings
-    from app.ingestion.embedder import Embedder
+    from app.ingestion.embedder import Embedder, SparseEmbedder
     from app.ingestion.vector_store import VectorStore
     from app.models.document_summary import DocumentSummary
     from app.models.project import Project
@@ -626,11 +654,13 @@ async def test_ingest_document_idempotent_on_retry() -> None:
             team_id = team.id
 
         embedder = Embedder()
+        sparse_embedder = SparseEmbedder()
         qdrant_client = AsyncQdrantClient(url=settings.qdrant_url)
         vector_store = VectorStore(client=qdrant_client)
         mock_arq = AsyncMock()
         ctx: dict[str, object] = {
             "embedder": embedder,
+            "sparse_embedder": sparse_embedder,
             "vector_store": vector_store,
             "redis": mock_arq,
         }
