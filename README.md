@@ -1,4 +1,4 @@
-# [PROJECT_NAME]
+# [UNNAMED_PROJECT_NAME] CANT THINK OF A NAME
 
 > A self-hostable, open-source hybrid RAG/CAG knowledge platform for teams. Each project gets its own living, structured understanding — not just a search index.
 
