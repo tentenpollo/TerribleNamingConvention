@@ -159,33 +159,52 @@ Access check
   → if admin cross-project: use full accessible set
        │
        ▼
-QueryService.query()
+QueryService.query() / query_cross_project()
   │
-  ├─ 1. CAG ORIENTATION
-  │    load belief_state for project (from Postgres)
-  │    construct system context:
-  │      "You are answering questions about [project].
-  │       Here is what is known about this project: {belief_state}"
+  ├─ 1. VALIDATION
+  │    question non-empty after strip; max 4000 chars
+  │    (InvalidQueryError → 422)
   │
-  ├─ 2. RAG RETRIEVAL
-  │    hybrid retrieval against project Qdrant collection:
+  ├─ 2. CAG ORIENTATION (project query only)
+  │    load latest belief_state for project (from Postgres)
+  │    corrupt / invalid state is caught, logged, and treated as None
+  │    (RAG-only degraded mode — a bad state must not break querying)
+  │
+  ├─ 3. RAG RETRIEVAL
+  │    hybrid dense + BM25 against project Qdrant collection(s):
   │      dense search (FastEmbed query vector)
   │      + BM25 sparse search
-  │    re-rank by combined score
-  │    take top-k chunks
+  │    re-rank by combined score; take top-k chunks
+  │    retrieve() / retrieve_multi() enforce accessible_project_ids
   │
-  ├─ 3. PROMPT CONSTRUCTION
-  │    system: CAG belief state context
-  │    user: retrieved chunks + original query
+  ├─ 4. PROMPT CONSTRUCTION  (app/retrieval/prompting.py)
+  │    system: answer from provided material only; untrusted-data framing;
+  │            surface conflicting claims and cite both sides
+  │    user:
+  │      <project_state>  ... sealed belief-state JSON ...  </project_state>
+  │      <sources>        [S1] ... chunk text ...            </sources>
+  │      Question: ...  (always outside data markers)
+  │    literal </project_state> / </sources> inside content are escaped
+  │    by _seal() so uploaded text cannot break out of a data region
   │
-  ├─ 4. LLM GENERATION
-  │    LiteLLM call (query model from project config)
+  ├─ 5. LLM GENERATION
+  │    LiteLLM call (query model from project config; cross-project uses
+  │    system default). temperature=0.2, max_tokens=2000.
   │
-  └─ 5. RESPONSE
+  └─ 6. RESPONSE
        answer text
-       + source_chunks[] (document name, chunk text, score)
-       + belief_state_version (so client knows how fresh CAG is)
+       + sources[] with citation labels (S1..Sn), document_id, filename,
+         chunk_index, text, score, project_id
+       + belief_state_version (None for cross-project)
+       + grounded = len(chunks) > 0
+
+       If chunks is empty AND belief state is None: short-circuit without
+       calling the LLM and return a plain "no indexed content" response.
 ```
+
+**Cross-project query rules (POST /query, admin only):** belief states are **not merged** across projects in v1 — cross-project state fusion is undesigned. The prompt includes `project_id` in each `[S]` header line so the client can group sources, but `belief_state_version` is always `None`.
+
+**Prompt-injection containment:** uploaded document content flows summarizer → belief state → query prompt. Because that content is untrusted, the system prompt explicitly instructs the model to treat any instruction-like text inside the data regions as quoted content. Structural sealing (`_seal()`) plus deterministic marker placement guarantee document-derived text never appears outside `<project_state>` or `<sources>`.
 
 ---
 

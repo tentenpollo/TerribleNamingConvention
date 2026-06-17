@@ -71,3 +71,7 @@ class InvalidBeliefStateError(AppError):
 
 class BeliefStateVersionConflictError(AppError):
     """Raised when a concurrent write violates the unique version constraint."""
+
+
+class InvalidQueryError(AppError):
+    """Raised when a query fails validation (empty, too long, etc.)."""

@@ -135,20 +135,22 @@
 
 | Task | Status |
 |---|---|
-| Project query endpoint POST /projects/{id}/query | ⬜ |
-| CAG orientation — belief state injected as system context | ⬜ |
-| RAG retrieval — hybrid dense + BM25 against project collection | ⬜ |
-| Chunk re-ranking by combined score | ⬜ |
-| Prompt construction — CAG system context + retrieved chunks + query | ⬜ |
-| LiteLLM call with project's configured query model | ⬜ |
-| Response with source chunk attribution | ⬜ |
-| Access enforcement at retrieval layer | ⬜ |
-| Admin cross-project query endpoint POST /query | ⬜ |
-| Tests: member query scoped to their project only | ⬜ |
-| Tests: admin query spans accessible projects | ⬜ |
-| Tests: belief state injected into context | ⬜ |
-| Tests: source attribution returned in response | ⬜ |
-| Tests: member cannot access admin cross-project endpoint | ⬜ |
+| Project query endpoint POST /projects/{id}/query | ✅ |
+| CAG orientation — belief state injected as system context | ✅ |
+| RAG retrieval — hybrid dense + BM25 against project collection | ✅ |
+| Chunk re-ranking by combined score | ✅ |
+| Prompt construction — CAG system context + retrieved chunks + query | ✅ |
+| LiteLLM call with project's configured query model | ✅ |
+| Response with source chunk attribution | ✅ |
+| Access enforcement at retrieval layer | ✅ |
+| Admin cross-project query endpoint POST /query | ✅ |
+| Prompt-injection containment for belief-state and chunk content | ✅ |
+| Tests: member query scoped to their project only | ✅ |
+| Tests: admin query spans accessible projects | ✅ |
+| Tests: belief state injected into context | ✅ |
+| Tests: source attribution returned in response | ✅ |
+| Tests: member cannot access admin cross-project endpoint | ✅ |
+| Tests: red-team structural containment of stored prompt injections | ✅ |
 
 **Done when:** A member can ask "what did we decide about X?" and get a grounded answer with sources.
 

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from arq.connections import RedisSettings, create_pool
 from fastapi import FastAPI
 
-from app.api import auth, cag, documents, health, projects, teams
+from app.api import auth, cag, documents, health, projects, query, teams
 from app.api.auth import (
     duplicate_email_handler,
     invalid_credentials_handler,
@@ -18,6 +18,7 @@ from app.api.documents import (
     ingestion_job_not_found_handler,
     unsupported_file_type_handler,
 )
+from app.api.query import invalid_query_handler
 from app.core.config import settings
 from app.core.exceptions import (
     AccessDeniedError,
@@ -26,6 +27,7 @@ from app.core.exceptions import (
     DuplicateEmailError,
     IngestionJobNotFoundError,
     InvalidCredentialsError,
+    InvalidQueryError,
     UnsupportedFileTypeError,
 )
 
@@ -47,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router, tags=["projects"])
     app.include_router(documents.router, tags=["documents"])
     app.include_router(cag.router, tags=["cag"])
+    app.include_router(query.router, tags=["query"])
 
     if settings.app_env in ("development", "test"):
         from app.api import dev
@@ -60,6 +63,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(IngestionJobNotFoundError, ingestion_job_not_found_handler)  # type: ignore[arg-type]
     app.add_exception_handler(DocumentNotFoundError, document_not_found_handler)  # type: ignore[arg-type]
     app.add_exception_handler(BeliefStateNotFoundError, belief_state_not_found_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(InvalidQueryError, invalid_query_handler)  # type: ignore[arg-type]
 
     return app
 

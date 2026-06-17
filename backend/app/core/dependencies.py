@@ -14,14 +14,16 @@ from app.core.database import AsyncSessionLocal
 from app.core.qdrant import get_qdrant_client
 from app.core.roles import Role, has_permission
 from app.core.security import decode_access_token
-from app.ingestion.embedder import Embedder
+from app.ingestion.embedder import Embedder, SparseEmbedder
 from app.ingestion.embedder import get_embedder as _get_embedder
+from app.ingestion.embedder import get_sparse_embedder as _get_sparse_embedder
 from app.ingestion.vector_store import VectorStore
 from app.models.user import User
 from app.services.auth import AuthService
 from app.services.cag import CAGService
 from app.services.document import DocumentService
 from app.services.project import ProjectService
+from app.services.query import QueryService
 from app.services.team import TeamService
 
 
@@ -125,6 +127,10 @@ def get_embedder() -> Embedder:
     return _get_embedder()
 
 
+def get_sparse_embedder() -> SparseEmbedder:
+    return _get_sparse_embedder()
+
+
 def get_arq_pool(request: Request) -> ArqRedis:
     return cast(ArqRedis, request.app.state.arq_pool)
 
@@ -140,3 +146,13 @@ async def get_cag_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> CAGService:
     return CAGService(session)
+
+
+async def get_query_service(
+    session: AsyncSession = Depends(get_async_session),
+    vector_store: VectorStore = Depends(get_vector_store),
+    embedder: Embedder = Depends(get_embedder),
+    sparse_embedder: SparseEmbedder = Depends(get_sparse_embedder),
+    cag_service: CAGService = Depends(get_cag_service),
+) -> QueryService:
+    return QueryService(session, vector_store, embedder, sparse_embedder, cag_service)

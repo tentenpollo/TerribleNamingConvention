@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.ingestion.chunker import ChunkingStrategy, chunk_text
 from app.ingestion.embedder import Embedder, SparseEmbedder
 from app.ingestion.parser import parse_file
-from app.ingestion.vector_store import VectorStore
+from app.ingestion.vector_store import VectorStore, collection_name
 from app.models.document import Document, FileType
 from app.models.project import Project
 from app.models.team import Team
@@ -28,10 +28,15 @@ _CORPUS = [
     "Customer support reported an outage in the EU region last night.",
     "The design system tokens were updated to support dark mode.",
     (
-        "During the retro computing review we noted that ZX81-FIRMWARE-ROTATION "
-        "is a concern, alongside several other minor issues."
+        "Quarterly planning, marketing campaigns, backend migrations, CI pipelines, "
+        "customer support, design systems, new hire onboarding, mobile releases, "
+        "analytics dashboards, and legal approvals all require attention. "
+        "Also noted: XJ9KL2MQ4ROTATION."
     ),
     "The ZX81 home computer firmware rotation issue requires urgent review and testing.",
+    "Firmware rotation is a common maintenance task for embedded systems.",
+    "Home computer enthusiasts often discuss ZX81 hardware modifications.",
+    "Testing and review are essential parts of the firmware development lifecycle.",
     "New hire onboarding docs need a section about SSH key setup.",
     "The mobile app release candidate passed regression testing.",
     "Analytics dashboard shows a 12% increase in signups this month.",
@@ -156,9 +161,11 @@ async def test_hybrid_retrieval_sparse_boosts_exact_token(
     )
 
     try:
+        rare_token = "XJ9KL2MQ4ROTATION"
+
         hybrid_results = await retrieve(
             project_id=project_id,
-            query_text="ZX81-FIRMWARE-ROTATION",
+            query_text=rare_token,
             accessible_ids=[project_id],
             vector_store=vector_store,
             embedder=embedder,
@@ -166,19 +173,19 @@ async def test_hybrid_retrieval_sparse_boosts_exact_token(
             top_k=3,
         )
         hybrid_texts = [r.text for r in hybrid_results]
-        assert any("ZX81-FIRMWARE-ROTATION" in text for text in hybrid_texts), (
+        assert any(rare_token in text for text in hybrid_texts), (
             "Exact-token query should rank the rare-token chunk in top-3 via BM25"
         )
 
         dense_only_hits = await vector_store.search(
             project_id,
-            query_vector=embedder.embed_query("ZX81-FIRMWARE-ROTATION"),
-            top_k=1,
+            query_vector=embedder.embed_query(rare_token),
+            top_k=3,
         )
-        assert len(dense_only_hits) == 1
-        dense_top_payload = dense_only_hits[0].payload or {}
-        assert "ZX81-FIRMWARE-ROTATION" not in dense_top_payload.get("text", ""), (
-            "Dense-only search should not rank the rare-token chunk first"
+        dense_only_texts = [hit.payload.get("text", "") for hit in dense_only_hits if hit.payload]
+        assert not any(rare_token in text for text in dense_only_texts), (
+            "Dense-only search should not rank the rare-token chunk in the top-3; "
+            "otherwise the hybrid assertion does not prove sparse contribution"
         )
 
         paraphrase_results = await retrieve(
@@ -191,8 +198,24 @@ async def test_hybrid_retrieval_sparse_boosts_exact_token(
             top_k=3,
         )
         paraphrase_texts = [r.text for r in paraphrase_results]
-        assert any("ZX81-FIRMWARE-ROTATION" in text for text in paraphrase_texts), (
+        assert any("ZX81 home computer firmware rotation" in text for text in paraphrase_texts), (
             "Paraphrase query should still retrieve the right chunk via dense semantics"
+        )
+
+        # Confirm the ingest path actually persisted sparse vectors to Qdrant.
+        # A hybrid search with missing sparse vectors would still return dense-only
+        # results and could hide a broken sparse embed/upsert path.
+        qdrant_client = vector_store._client
+        scroll_response = await qdrant_client.scroll(
+            collection_name=collection_name(project_id),
+            limit=100,
+            with_vectors=True,
+        )
+        points = scroll_response[0]
+        assert points, "Collection should contain indexed points"
+        assert all("dense" in point.vector for point in points)
+        assert all("bm25" in point.vector for point in points), (
+            "Every upserted point must include the sparse 'bm25' vector"
         )
     finally:
         await vector_store.delete_collection(project_id)
