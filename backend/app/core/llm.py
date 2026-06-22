@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import litellm
 
 from app.core.exceptions import LLMError
 from app.core.logging import logger
+
+
+@dataclass
+class LLMResult:
+    """Result of a single LLM completion call."""
+
+    text: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    model: str
 
 
 async def llm_call(
@@ -12,7 +24,7 @@ async def llm_call(
     max_tokens: int = 1000,
     response_format: dict[str, str] | None = None,
     temperature: float | None = None,
-) -> str:
+) -> LLMResult:
     completion_kwargs: dict[str, object] = {
         "model": model,
         "messages": messages,
@@ -26,13 +38,23 @@ async def llm_call(
     try:
         response = await litellm.acompletion(**completion_kwargs)
         content = str(response.choices[0].message.content)
-        token_count = response.usage.total_tokens if response.usage else None
+        prompt_tokens = None
+        completion_tokens = None
+        if response.usage is not None:
+            prompt_tokens = response.usage.prompt_tokens
+            completion_tokens = response.usage.completion_tokens
         logger.info(
             "LLM call completed",
             model=model,
-            token_count=token_count,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             response_format="json_object" if response_format else None,
         )
-        return content
+        return LLMResult(
+            text=content,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            model=model,
+        )
     except Exception as exc:
         raise LLMError(f"LLM call failed for model {model}: {exc}") from exc

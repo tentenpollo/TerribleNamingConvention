@@ -14,6 +14,7 @@ from sqlalchemy import delete, select, text
 from app.core import database
 from app.core.config import settings
 from app.core.exceptions import BeliefStateVersionConflictError, InvalidBeliefStateError
+from app.core.llm import LLMResult
 from app.ingestion.embedder import Embedder, SparseEmbedder
 from app.ingestion.vector_store import VectorStore
 from app.models.belief_state import BeliefState
@@ -236,6 +237,15 @@ _VALID_BELIEF_STATE_JSON = (
 )
 
 
+def _llm_result(text: str) -> LLMResult:
+    return LLMResult(
+        text=text,
+        prompt_tokens=10,
+        completion_tokens=5,
+        model="gpt-4o-mini",
+    )
+
+
 _SUMMARY_MOCK_RETURN = {
     "summary": "Integration test document summary.",
     "key_points": ["test"],
@@ -311,7 +321,10 @@ async def test_first_document_ingest_creates_belief_state_v1(cag_project) -> Non
         assert enqueue_kwargs.get("_job_id") == f"cag-update-{project_id}"
 
         with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
-            with patch("app.workers.cag.llm_call", return_value=_VALID_BELIEF_STATE_JSON):
+            with patch(
+                "app.workers.cag.llm_call",
+                return_value=_llm_result(_VALID_BELIEF_STATE_JSON),
+            ):
                 await cag_update({"redis": mock_arq}, project_id)
 
         async with database.AsyncSessionLocal() as session:
@@ -414,7 +427,10 @@ async def test_concurrent_ingest_triggers_single_cag_version(cag_project) -> Non
 
         # Simulate ARQ dedup: only one cag_update actually runs.
         with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
-            with patch("app.workers.cag.llm_call", return_value=_VALID_BELIEF_STATE_JSON):
+            with patch(
+                "app.workers.cag.llm_call",
+                return_value=_llm_result(_VALID_BELIEF_STATE_JSON),
+            ):
                 await cag_update({"redis": mock_arq}, project_id)
 
         async with database.AsyncSessionLocal() as session:
@@ -482,6 +498,7 @@ async def test_fallback_only_summaries_never_trigger_insert(cag_project) -> None
             await session.commit()
 
         mock_llm = AsyncMock()
+        mock_llm.return_value = _llm_result(_VALID_BELIEF_STATE_JSON)
         mock_arq = AsyncMock()
 
         with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
@@ -601,12 +618,12 @@ async def test_genesis_rebuild_closes_explicitly_resolved_open_item(cag_project)
             )
             await session.commit()
 
-        async def resolve_open_item(*args: object, **kwargs: object) -> str:
+        async def resolve_open_item(*args: object, **kwargs: object) -> LLMResult:
             messages = kwargs.get("messages", args[0] if args else [])
             content = messages[-1]["content"] if messages else ""
             if "API spec has been finalized" in content:
-                return _DETERMINISTIC_RESOLVED_STATE
-            return _DETERMINISTIC_OPEN_ITEM_STATE
+                return _llm_result(_DETERMINISTIC_RESOLVED_STATE)
+            return _llm_result(_DETERMINISTIC_OPEN_ITEM_STATE)
 
         mock_arq = AsyncMock()
         ctx: dict[str, object] = {"redis": mock_arq}
@@ -707,7 +724,7 @@ async def test_genesis_rebuild_on_120_summaries(cag_project) -> None:
         with patch("app.workers.cag.AsyncSessionLocal", database.AsyncSessionLocal):
             with patch(
                 "app.workers.cag.llm_call",
-                return_value=_DETERMINISTIC_BELIEF_STATE_JSON,
+                return_value=_llm_result(_DETERMINISTIC_BELIEF_STATE_JSON),
             ):
                 await cag_rebuild(ctx, project_id, "genesis")
 

@@ -278,7 +278,7 @@ async def _synthesize_prompt(
         ]
 
         try:
-            response_text = await llm_call(
+            llm_result = await llm_call(
                 messages=messages,
                 model=context_model,
                 max_tokens=4000,
@@ -289,7 +289,7 @@ async def _synthesize_prompt(
             raise
 
         try:
-            parsed = json.loads(response_text)
+            parsed = json.loads(llm_result.text)
             return BeliefStateContent.model_validate(parsed)
         except json.JSONDecodeError as exc:
             errors.append(f"JSON parse error: {exc}")

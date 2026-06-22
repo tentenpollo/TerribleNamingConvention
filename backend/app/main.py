@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from arq.connections import RedisSettings, create_pool
 from fastapi import FastAPI
+from redis.asyncio import Redis
 
 from app.api import auth, cag, documents, health, projects, query, teams
 from app.api.auth import (
@@ -18,7 +19,7 @@ from app.api.documents import (
     ingestion_job_not_found_handler,
     unsupported_file_type_handler,
 )
-from app.api.query import invalid_query_handler
+from app.api.query import invalid_query_handler, query_generation_error_handler
 from app.core.config import settings
 from app.core.exceptions import (
     AccessDeniedError,
@@ -28,17 +29,24 @@ from app.core.exceptions import (
     IngestionJobNotFoundError,
     InvalidCredentialsError,
     InvalidQueryError,
+    QueryGenerationError,
     UnsupportedFileTypeError,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Dedicated redis.asyncio client for rate limiting and other operational
+    # concerns. Reusing the ARQ broker pool for raw Redis commands couples the
+    # job broker to unrelated infrastructure; a separate connection keeps the
+    # failure domains independent.
     app.state.arq_pool = await create_pool(
         RedisSettings.from_dsn(settings.redis_url),
     )
+    app.state.rate_limit_redis = Redis.from_url(settings.redis_url, decode_responses=True)
     yield
     await app.state.arq_pool.close()
+    await app.state.rate_limit_redis.close()
 
 
 def create_app() -> FastAPI:
@@ -64,6 +72,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(DocumentNotFoundError, document_not_found_handler)  # type: ignore[arg-type]
     app.add_exception_handler(BeliefStateNotFoundError, belief_state_not_found_handler)  # type: ignore[arg-type]
     app.add_exception_handler(InvalidQueryError, invalid_query_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(QueryGenerationError, query_generation_error_handler)  # type: ignore[arg-type]
 
     return app
 

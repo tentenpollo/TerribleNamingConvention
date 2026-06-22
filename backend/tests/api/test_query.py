@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
+from fastapi import HTTPException, Request, status
 from httpx import ASGITransport, AsyncClient
 import pytest
+from sqlalchemy import delete
 
+from app.api.query import query_generation_error_handler, rate_limit_query
 from app.core.config import settings
 from app.core.dependencies import (
     get_accessible_projects,
@@ -15,12 +18,14 @@ from app.core.dependencies import (
     get_current_user,
     get_query_service,
 )
-from app.core.exceptions import AccessDeniedError, InvalidQueryError
+from app.core.exceptions import AccessDeniedError, InvalidQueryError, QueryGenerationError
+from app.core.llm import LLMResult
 from app.core.roles import Role
 from app.core.security import create_access_token
 from app.ingestion.embedder import Embedder, SparseEmbedder
 from app.ingestion.vector_store import VectorStore
 from app.main import app
+from app.models.belief_state import BeliefState
 from app.models.document import Document, FileType
 from app.models.project import Project
 from app.models.team import Team, TeamMember
@@ -89,10 +94,14 @@ def override_dependencies(
     def override_get_current_user() -> User:
         return member_user
 
+    async def override_rate_limit_query() -> None:
+        return None
+
     app.dependency_overrides[get_async_session] = override_get_async_session
     app.dependency_overrides[get_query_service] = override_get_query_service
     app.dependency_overrides[get_accessible_projects] = override_get_accessible_projects
     app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[rate_limit_query] = override_rate_limit_query
     yield
     app.dependency_overrides.clear()
 
@@ -101,6 +110,7 @@ def override_dependencies(
 async def test_member_queries_own_project_returns_200(
     async_client: AsyncClient,
     member_token: str,
+    member_user: User,
     query_service: AsyncMock,
     accessible_ids: list[uuid.UUID],
 ) -> None:
@@ -141,6 +151,7 @@ async def test_member_queries_own_project_returns_200(
         question="What?",
         project_id=project_id,
         accessible_ids=accessible_ids,
+        user_id=member_user.id,
         top_k=8,
     )
 
@@ -239,6 +250,7 @@ async def test_admin_cross_project_query_returns_200_with_multi_project_sources(
     query_service.query_cross_project.assert_awaited_once_with(
         question="What?",
         accessible_ids=accessible_ids,
+        user_id=admin_user.id,
         top_k=8,
     )
 
@@ -319,6 +331,42 @@ async def test_query_invalid_empty_question_returns_422(
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_query_generation_error_handler_returns_503_retryable() -> None:
+    request = Request({"type": "http"})
+    exc = QueryGenerationError("Generation failed")
+
+    response = await query_generation_error_handler(request, exc)
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    body = response.body.decode()
+    assert '"detail":"Generation failed"' in body
+    assert '"retryable":true' in body
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_query_dependency_rejects_over_limit(member_user: User) -> None:
+    original_limit = settings.query_rate_limit_per_minute
+    settings.query_rate_limit_per_minute = 2
+    try:
+        redis = MagicMock()
+        pipeline = MagicMock()
+        redis.pipeline.return_value = pipeline
+        pipeline.execute = AsyncMock(return_value=[0, 3])
+        redis.zrange = AsyncMock(return_value=[("999.0", 999.0)])
+
+        with patch("app.api.query.time.time", return_value=1000.0):
+            with pytest.raises(HTTPException) as exc_info:
+                await rate_limit_query(current_user=member_user, redis=redis)
+
+        assert exc_info.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert exc_info.value.headers["Retry-After"] == "59"
+        pipeline.zadd.assert_not_called()
+        pipeline.pexpire.assert_not_called()
+    finally:
+        settings.query_rate_limit_per_minute = original_limit
+
+
 # ---------------------------------------------------------------------------
 # Red-team integration test — requires real Postgres, Redis, Qdrant
 # ---------------------------------------------------------------------------
@@ -357,40 +405,55 @@ async def test_prompt_injection_containment_structural() -> None:
     document_ids: list[uuid.UUID] = []
     recorded_query_messages: list[list[dict[str, str]]] = []
 
-    def make_llm_response(messages: list[dict[str, str]], **kwargs: object) -> str:
+    def make_llm_response(messages: list[dict[str, str]], **kwargs: object) -> LLMResult:
         full_text = "\n".join(msg.get("content", "") for msg in messages)
         if "project memory extraction system" in full_text:
             # Summarizer: faithfully echo ALL payloads into summary fields, including the
             # marker-escape string, so it reaches the belief state via the real CAG path.
-            return (
-                '{"summary": "'
-                + _INJECTION_PAYLOADS[0].replace('"', '\\"')
-                + '", "key_points": ["'
-                + _INJECTION_PAYLOADS[1].replace('"', '\\"')
-                + '", "'
-                + _INJECTION_PAYLOADS[2].replace('"', '\\"')
-                + '"], "technical_concepts": [], "architectural_components": [], '
-                '"decisions": [], "action_items": [], "entities": {"people": [], '
-                '"organizations": [], "technologies": [], "repositories": [], "services": []}, '
-                '"topics": [], "important_relationships": [], "document_type": "other", '
-                '"confidence": 0.9}'
+            return LLMResult(
+                text=(
+                    '{"summary": "'
+                    + _INJECTION_PAYLOADS[0].replace('"', '\\"')
+                    + '", "key_points": ["'
+                    + _INJECTION_PAYLOADS[1].replace('"', '\\"')
+                    + '", "'
+                    + _INJECTION_PAYLOADS[2].replace('"', '\\"')
+                    + '"], "technical_concepts": [], "architectural_components": [], '
+                    '"decisions": [], "action_items": [], "entities": {"people": [], '
+                    '"organizations": [], "technologies": [], "repositories": [], "services": []}, '
+                    '"topics": [], "important_relationships": [], "document_type": "other", '
+                    '"confidence": 0.9}'
+                ),
+                prompt_tokens=50,
+                completion_tokens=25,
+                model="gpt-4o-mini",
             )
 
         if "structured project memory synthesis system" in full_text:
             # CAG synthesis: place the marker-escape payload into project_summary so it
             # enters the prompt inside the highest-trust <project_state> region.
-            return (
-                '{"project_summary": "'
-                + _INJECTION_PAYLOADS[0].replace('"', '\\"')
-                + " "
-                + _INJECTION_PAYLOADS[1].replace('"', '\\"')
-                + '", "decisions": [{"description": "'
-                + _INJECTION_PAYLOADS[2].replace('"', '\\"')
-                + '"}], "open_items": [], "key_people": [], "recurring_themes": []}'
+            return LLMResult(
+                text=(
+                    '{"project_summary": "'
+                    + _INJECTION_PAYLOADS[0].replace('"', '\\"')
+                    + " "
+                    + _INJECTION_PAYLOADS[1].replace('"', '\\"')
+                    + '", "decisions": [{"description": "'
+                    + _INJECTION_PAYLOADS[2].replace('"', '\\"')
+                    + '"}], "open_items": [], "key_people": [], "recurring_themes": []}'
+                ),
+                prompt_tokens=50,
+                completion_tokens=25,
+                model="gpt-4o-mini",
             )
         # Query: record and return a safe answer.
         recorded_query_messages.append(messages)
-        return "safe answer"
+        return LLMResult(
+            text="safe answer",
+            prompt_tokens=10,
+            completion_tokens=5,
+            model="gpt-4o-mini",
+        )
 
     try:
         async with database.AsyncSessionLocal() as session:
@@ -582,6 +645,85 @@ async def test_prompt_injection_containment_structural() -> None:
                     delete(DocumentSummary).where(DocumentSummary.project_id == project_id)
                 )
                 await session.execute(delete(Document).where(Document.project_id == project_id))
+                await session.execute(
+                    delete(BeliefState).where(BeliefState.project_id == project_id)
+                )
+                await session.execute(delete(Project).where(Project.id == project_id))
+                if team_id is not None:
+                    await session.execute(delete(TeamMember).where(TeamMember.team_id == team_id))
+                    await session.execute(delete(Team).where(Team.id == team_id))
+                if user_id is not None:
+                    await session.execute(delete(User).where(User.id == user_id))
+                await session.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_query_rate_limit_integration_429_with_retry_after() -> None:
+    """Real Redis sliding-window rate limit rejects the N+1th query with 429."""
+    from app.core import database
+    from app.models.project import Project
+    from app.models.team import Team, TeamMember
+    from app.models.user import User
+
+    original_limit = settings.query_rate_limit_per_minute
+    settings.query_rate_limit_per_minute = 2
+
+    project_id: uuid.UUID | None = None
+    team_id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
+
+    try:
+        async with database.AsyncSessionLocal() as session:
+            user = User(
+                email="rate-limit@example.com",
+                hashed_password="hashed",
+                role=Role.MEMBER.value,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+
+            team = Team(name="Rate Limit Team")
+            session.add(team)
+            await session.flush()
+
+            membership = TeamMember(team_id=team.id, user_id=user.id)
+            session.add(membership)
+
+            project = Project(name="Rate Limit Project", team_id=team.id, config={})
+            session.add(project)
+            await session.commit()
+
+            user_id = user.id
+            team_id = team.id
+            project_id = project.id
+
+        token = create_access_token(user_id, Role.MEMBER.value)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            for _ in range(2):
+                response = await client.post(
+                    f"/projects/{project_id}/query",
+                    json={"question": "What?"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                assert response.status_code == 200
+
+            response = await client.post(
+                f"/projects/{project_id}/query",
+                json={"question": "What?"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 429
+        assert "Retry-After" in response.headers
+        assert int(response.headers["Retry-After"]) >= 0
+
+    finally:
+        settings.query_rate_limit_per_minute = original_limit
+        if project_id is not None:
+            async with database.AsyncSessionLocal() as session:
                 await session.execute(
                     delete(BeliefState).where(BeliefState.project_id == project_id)
                 )

@@ -450,13 +450,44 @@ async def llm_call(
     model: str,           # from project config, never hardcoded
     max_tokens: int = 1000,
     response_format: dict | None = None,
-) -> str:
+) -> LLMResult:
     response = await litellm.acompletion(
         model=model,
         messages=messages,
         max_tokens=max_tokens,
     )
-    return response.choices[0].message.content
+    return LLMResult(
+        text=response.choices[0].message.content,
+        prompt_tokens=response.usage.prompt_tokens if response.usage else None,
+        completion_tokens=response.usage.completion_tokens if response.usage else None,
+        model=model,
+    )
 ```
 
 Model names come from project config or system defaults in `.env`. Never hardcoded in service or retrieval code.
+
+---
+
+## Operational Limits
+
+The query path has two hard operational boundaries:
+
+1. **Per-user rate limiting.** A sliding-window limiter (`/backend/app/core/ratelimit.py`)
+   tracks each user's query requests in Redis (`rl:query:{user_id}`). It uses a sorted set
+   with `ZADD`, `ZREMRANGEBYSCORE`, and `ZCARD` inside a pipeline. The window and limit are
+   configurable via `QUERY_RATE_LIMIT_PER_MINUTE` (default: 20). When the limit is exceeded
+   the API returns `429 Too Many Requests` with a `Retry-After` header. If Redis is
+   unavailable the limiter fails open and logs an error so that a broken rate limiter does
+   not take down querying.
+
+2. **LLM generation timeout.** Query generation is wrapped in
+   `asyncio.timeout(settings.query_llm_timeout_seconds)` (default: 60). On `TimeoutError`
+   or `LLMError`, `QueryService` raises `QueryGenerationError`, which the API converts to a
+   `503 Service Unavailable` response with `{"detail": "...", "retryable": true}`. Retrieval
+   results are not discarded; chunk count and belief-state version are logged at error level
+   for diagnosis.
+
+3. **Token/cost telemetry.** Every completed query emits a single structured `query_completed`
+   event containing `user_id`, `project_id` (or `"cross"`), `top_k`, `chunk_count`,
+   `belief_state_version`, `prompt_tokens`, `completion_tokens`, `model`, `duration_ms`, and
+   `grounded`. Question text, chunk text, and answer text are never included in logs.

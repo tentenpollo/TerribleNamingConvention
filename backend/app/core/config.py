@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     cag_max_prompt_tokens: int = 100_000
     max_upload_size_mb: int = 50
     arq_max_jobs: int = 10
+    query_rate_limit_per_minute: int = 20
+    query_llm_timeout_seconds: int = 60
 
     class Config:
         env_file = ".env"

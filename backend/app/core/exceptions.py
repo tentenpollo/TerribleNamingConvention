@@ -75,3 +75,7 @@ class BeliefStateVersionConflictError(AppError):
 
 class InvalidQueryError(AppError):
     """Raised when a query fails validation (empty, too long, etc.)."""
+
+
+class QueryGenerationError(AppError):
+    """Raised when LLM generation for a query fails or times out."""

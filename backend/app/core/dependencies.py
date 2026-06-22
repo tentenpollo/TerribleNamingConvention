@@ -7,6 +7,7 @@ import uuid
 from arq.connections import ArqRedis
 from fastapi import Depends, Header, HTTPException, Request, status
 import jwt
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import get_accessible_project_ids
@@ -133,6 +134,10 @@ def get_sparse_embedder() -> SparseEmbedder:
 
 def get_arq_pool(request: Request) -> ArqRedis:
     return cast(ArqRedis, request.app.state.arq_pool)
+
+
+def get_rate_limit_redis(request: Request) -> Redis:
+    return cast(Redis, request.app.state.rate_limit_redis)
 
 
 async def get_document_service(

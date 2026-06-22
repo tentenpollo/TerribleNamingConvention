@@ -7,6 +7,7 @@ import uuid
 import pytest
 
 from app.core.exceptions import LLMError
+from app.core.llm import LLMResult
 from app.models.document_summary import DocumentSummary
 from app.models.project import Project
 from app.schemas.belief_state import BeliefStateContent, Decision, OpenItem
@@ -25,6 +26,15 @@ def _valid_belief_state_json() -> str:
         '{"project_summary": "A project summary.", '
         '"decisions": [], "open_items": [], '
         '"key_people": [], "recurring_themes": []}'
+    )
+
+
+def _llm_result(text: str) -> LLMResult:
+    return LLMResult(
+        text=text,
+        prompt_tokens=10,
+        completion_tokens=5,
+        model="gpt-4o-mini",
     )
 
 
@@ -86,7 +96,10 @@ async def test_cag_update_valid_json_inserts_version() -> None:
             mock_session.__aexit__.return_value = None
             mock_session_local.return_value = mock_session
             with patch("app.workers.cag.CAGService", fake_service_class):
-                with patch("app.workers.cag.llm_call", return_value=_valid_belief_state_json()):
+                with patch(
+                    "app.workers.cag.llm_call",
+                    return_value=_llm_result(_valid_belief_state_json()),
+                ):
                     await cag_update(ctx, project.id)
 
     mock_arq.enqueue_job.assert_not_awaited()
@@ -108,7 +121,7 @@ async def test_cag_update_invalid_json_twice_raises_no_insert() -> None:
             with patch("app.workers.cag.CAGService", fake_service_class):
                 with patch(
                     "app.workers.cag.llm_call",
-                    return_value="not valid json {{{",
+                    return_value=_llm_result("not valid json {{{"),
                 ):
                     with pytest.raises(LLMError):
                         await cag_update(ctx, project.id)
@@ -130,12 +143,12 @@ async def test_cag_update_invalid_then_valid_succeeds_with_retry() -> None:
 
     call_count = 0
 
-    async def fake_llm_call(*args, **kwargs):
+    async def fake_llm_call(*args: object, **kwargs: object) -> LLMResult:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return "not valid json {{{"
-        return _valid_belief_state_json()
+            return _llm_result("not valid json {{{")
+        return _llm_result(_valid_belief_state_json())
 
     with patch("app.workers.cag._fetch_project", return_value=project):
         with patch("app.workers.cag.AsyncSessionLocal") as mock_session_local:
@@ -170,7 +183,10 @@ async def test_cag_update_remaining_summaries_re_enqueues_with_fixed_job_id() ->
             mock_session.__aexit__.return_value = None
             mock_session_local.return_value = mock_session
             with patch("app.workers.cag.CAGService", fake_service_class):
-                with patch("app.workers.cag.llm_call", return_value=_valid_belief_state_json()):
+                with patch(
+                    "app.workers.cag.llm_call",
+                    return_value=_llm_result(_valid_belief_state_json()),
+                ):
                     await cag_update(ctx, project.id)
 
     mock_arq.enqueue_job.assert_awaited_once()
@@ -208,10 +224,10 @@ async def test_hierarchical_reduce_500_summaries_makes_14_calls() -> None:
     summaries = _make_summaries(500)
     call_count = 0
 
-    async def fake_llm(*args: object, **kwargs: object) -> str:
+    async def fake_llm(*args: object, **kwargs: object) -> LLMResult:
         nonlocal call_count
         call_count += 1
-        return _valid_belief_state_json()
+        return _llm_result(_valid_belief_state_json())
 
     with patch("app.workers.cag.llm_call", side_effect=fake_llm):
         result = await _hierarchical_reduce(
@@ -232,10 +248,10 @@ async def test_hierarchical_reduce_95_summaries_makes_4_calls() -> None:
     summaries = _make_summaries(95)
     call_count = 0
 
-    async def fake_llm(*args: object, **kwargs: object) -> str:
+    async def fake_llm(*args: object, **kwargs: object) -> LLMResult:
         nonlocal call_count
         call_count += 1
-        return _valid_belief_state_json()
+        return _llm_result(_valid_belief_state_json())
 
     with patch("app.workers.cag.llm_call", side_effect=fake_llm):
         result = await _hierarchical_reduce(
@@ -256,10 +272,10 @@ async def test_hierarchical_reduce_30_summaries_makes_1_call() -> None:
     summaries = _make_summaries(30)
     call_count = 0
 
-    async def fake_llm(*args: object, **kwargs: object) -> str:
+    async def fake_llm(*args: object, **kwargs: object) -> LLMResult:
         nonlocal call_count
         call_count += 1
-        return _valid_belief_state_json()
+        return _llm_result(_valid_belief_state_json())
 
     with patch("app.workers.cag.llm_call", side_effect=fake_llm):
         result = await _hierarchical_reduce(

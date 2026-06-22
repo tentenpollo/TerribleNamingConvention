@@ -145,12 +145,18 @@
 | Access enforcement at retrieval layer | ✅ |
 | Admin cross-project query endpoint POST /query | ✅ |
 | Prompt-injection containment for belief-state and chunk content | ✅ |
+| Per-user sliding-window rate limiting over Redis | ✅ |
+| LLM timeout and graceful 503 retryable failure | ✅ |
+| Token/cost telemetry via structured query_completed logs | ✅ |
 | Tests: member query scoped to their project only | ✅ |
 | Tests: admin query spans accessible projects | ✅ |
 | Tests: belief state injected into context | ✅ |
 | Tests: source attribution returned in response | ✅ |
 | Tests: member cannot access admin cross-project endpoint | ✅ |
 | Tests: red-team structural containment of stored prompt injections | ✅ |
+| Tests: rate limiter allows/rejects and returns Retry-After | ✅ |
+| Tests: 503 retryable handler | ✅ |
+| Tests: log privacy (no question/chunk/answer text) | ✅ |
 
 **Done when:** A member can ask "what did we decide about X?" and get a grounded answer with sources.
 
