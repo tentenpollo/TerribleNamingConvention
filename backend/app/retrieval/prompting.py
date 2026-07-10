@@ -46,7 +46,7 @@ def build_user_prompt(
 
     if belief_state is not None:
         lines.append("<project_state>")
-        lines.append(_seal(json.dumps(belief_state.model_dump(), separators=(",", ":"))))
+        lines.append(_seal(json.dumps(belief_state.model_dump(mode="json"), separators=(",", ":"))))
         lines.append("</project_state>")
     else:
         lines.append("(no project state available)")

@@ -166,7 +166,7 @@ class CAGService:
             row = BeliefState(
                 project_id=project_id,
                 version=next_version,
-                state=content.model_dump(),
+                state=content.model_dump(mode="json"),
                 rebuild_type="incremental",
                 last_summary_created_at=last_summary_created_at,
                 summary_count_covered=summary_count_covered,
@@ -249,7 +249,7 @@ class CAGService:
             row = BeliefState(
                 project_id=project_id,
                 version=next_version,
-                state=content.model_dump(),
+                state=content.model_dump(mode="json"),
                 rebuild_type="full",
                 last_summary_created_at=last_summary_created_at,
                 summary_count_covered=summary_count_covered,
@@ -311,8 +311,8 @@ class CAGService:
                 row = BeliefState(
                     project_id=project_id,
                     version=next_version,
-                    state=content.model_dump(),
-                    rebuild_type=rebuild_type,
+                state=content.model_dump(mode="json"),
+                rebuild_type=rebuild_type,
                     last_summary_created_at=last_summary_created_at,
                     summary_count_covered=summary_count_covered,
                 )

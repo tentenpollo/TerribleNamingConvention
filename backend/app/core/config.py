@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 60
     litellm_query_model: str = "gpt-4o-mini"
     litellm_context_model: str = "gpt-4o-mini"
+    litellm_api_base: str | None = None  # pragma: allowlist secret
+    litellm_api_key: str | None = None  # pragma: allowlist secret
     default_chunking_strategy: str = "naive"
     default_chunk_size: int = 512
     default_chunk_overlap: int = 64

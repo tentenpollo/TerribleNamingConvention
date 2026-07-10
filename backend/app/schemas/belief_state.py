@@ -44,7 +44,7 @@ class KeyPerson(BaseModel):
 class BeliefStateContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    project_summary: str = Field(..., max_length=1200)
+    project_summary: str = Field(..., max_length=5000)
     decisions: Annotated[list[Decision], Field(max_length=100)] = Field(default_factory=list)
     open_items: Annotated[list[OpenItem], Field(max_length=100)] = Field(default_factory=list)
     key_people: Annotated[list[KeyPerson], Field(max_length=50)] = Field(default_factory=list)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import litellm
 
+from app.core.config import settings
 from app.core.exceptions import LLMError
 from app.core.logging import logger
 
@@ -34,6 +35,10 @@ async def llm_call(
         completion_kwargs["response_format"] = response_format
     if temperature is not None:
         completion_kwargs["temperature"] = temperature
+    if settings.litellm_api_base is not None:
+        completion_kwargs["api_base"] = settings.litellm_api_base
+    if settings.litellm_api_key is not None:
+        completion_kwargs["api_key"] = settings.litellm_api_key
 
     try:
         response = await litellm.acompletion(**completion_kwargs)

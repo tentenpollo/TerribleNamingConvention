@@ -8,7 +8,7 @@ from app.schemas.belief_state import BeliefStateContent
 
 _CAP_INSTRUCTIONS = (
     "Strict schema caps (enforce these exactly):\n"
-    "- project_summary: required string, max 1200 characters\n"
+    "- project_summary: required string, max 5000 characters\n"
     "- decisions: required list, max 100 items; each item has:\n"
     "    - description: required string, max 500 characters\n"
     "    - approximate_date: ISO date string (YYYY-MM-DD) or null\n"
@@ -180,5 +180,5 @@ def format_batch_digest_prompt(summaries: list[DocumentSummary]) -> str:
 def format_digest_merge_prompt(digests: list[BeliefStateContent]) -> str:
     if not digests:
         raise ValueError("At least one digest is required for merge")
-    formatted = "\n\n".join(json.dumps(d.model_dump(), indent=2, default=str) for d in digests)
+    formatted = "\n\n".join(json.dumps(d.model_dump(mode="json"), indent=2) for d in digests)
     return DIGEST_MERGE_PROMPT.format(digests=formatted)

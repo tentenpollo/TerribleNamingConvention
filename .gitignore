@@ -120,3 +120,9 @@ $RECYCLE.BIN/
 test-results/
 playwright-report/
 playwright/.cache/
+
+# =============================================================================
+# Eval harness run artifacts
+# (fixtures under eval/fixtures/ ARE committed; only run outputs are ignored)
+# =============================================================================
+eval/results/

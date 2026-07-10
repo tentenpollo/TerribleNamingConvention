@@ -162,6 +162,31 @@
 
 ---
 
+## Phase 4.4 — CAG Evaluation Harness
+**Goal: An offline harness that measures whether belief-state injection actually helps — built and unit-tested against a mock LLM; the real run is pending the operator.**
+
+This is not part of the request path. It is a standalone script + fixtures + report under `eval/`. No `app/` request-path changes, no endpoints, no migration.
+
+| Task | Status |
+|---|---|
+| Synthetic fixture corpus (16 invented-domain docs) with dated-supersession + undated-contradiction pairs | ✅ |
+| questions.yaml — 36 questions with reference answers + expected behavior | ✅ |
+| Two-arm runner — CAG arm (real QueryService) vs RAG arm (same path, belief_state=None); asserts identical retrieval across arms | ✅ |
+| Genuine belief state via real ingestion pipeline + cag_rebuild (genesis) | ✅ |
+| Blind LLM judge — randomized arms, Pydantic JSON validation, one retry, three-axis rubric | ✅ |
+| Calibration scaffold — judge-vs-human grades with loud warning gate | ✅ |
+| Aggregation + report answering Q1 (quality) / Q2 (style) / Q3 (conflict handling) | ✅ |
+| Mock LLM (deterministic) for build-time + dry-run plumbing | ✅ |
+| Unit tests against the mock (two-arm invariant, blinding, judge JSON, report math, calibration, teardown finally-coverage) | ✅ |
+| ruff + mypy clean; no app/ request-path changes | ✅ |
+| Dry-run end-to-end with mock LLM (ingest → 2 arms → judge → report) | ✅ (plumbing proven; numbers mock-derived) |
+| Real run against a real LLM key (produces the actual numbers) | ⬜ (pending operator) |
+| Calibration filled in by a human (~5 questions) and judge trustworthiness confirmed | ⬜ (pending operator) |
+
+**Done when:** The operator runs `python -m eval.run_eval` against a real key, fills in `eval/fixtures/human_grades.yaml`, confirms calibration passes, and reads the Q1/Q2/Q3 report. Until then the harness is built and plumbing-proven only — its findings are pending.
+
+---
+
 ## Phase 5 — Frontend
 **Goal: The whole thing is usable without touching the API directly.**
 

@@ -1,0 +1,66 @@
+# Human calibration grades — FILLED IN BY HAND by the operator.
+#
+# Run `python -m eval.calibrate --run eval/results/run_<timestamp>.json` to
+# produce a draft of this file from the latest run, then edit the 1-5 grades
+# below for ~5 questions using the same rubric as the judge:
+#   factual_correctness, grounding, conflict_handling
+# (conflict_handling = 3 / N/A for non-conflict questions).
+#
+# When you have filled in human_grades, run calibrate again to compare
+# judge vs human agreement and gate interpretation of the full run.
+#
+# Format: list of maps. `question_id` must match a questions.yaml id.
+# `arm` is "cag" or "rag". Scores are integers 1-5.
+
+calibration_question_ids: [q28, q10, q25, q35, q36]
+human_grades:
+  - question_id: q28
+    arm: cag
+    factual_correctness: 4
+    grounding: 5
+    conflict_handling: 5
+  - question_id: q28
+    arm: rag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 5
+  - question_id: q10
+    arm: rag
+    factual_correctness: 5
+    grounding: 1
+    conflict_handling: 5
+  - question_id: q10
+    arm: cag
+    factual_correctness: 5
+    grounding: 2
+    conflict_handling: 5
+  - question_id: q25
+    arm: rag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 5
+  - question_id: q25
+    arm: cag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 5
+  - question_id: q36
+    arm: rag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 4
+  - question_id: q36
+    arm: cag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 5
+  - question_id: q35
+    arm: rag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 4
+  - question_id: q35
+    arm: cag
+    factual_correctness: 5
+    grounding: 5
+    conflict_handling: 5

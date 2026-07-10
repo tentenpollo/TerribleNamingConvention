@@ -58,7 +58,7 @@ async def cag_update(ctx: dict[str, object], project_id: uuid.UUID) -> None:
             base_prompt = (
                 format_initial_prompt(window)
                 if current_state is None
-                else format_incremental_prompt(current_state.model_dump(), window)
+                else format_incremental_prompt(current_state.model_dump(mode="json"), window)
             )
             return await _synthesize_prompt(
                 prompt=base_prompt,
@@ -281,7 +281,7 @@ async def _synthesize_prompt(
             llm_result = await llm_call(
                 messages=messages,
                 model=context_model,
-                max_tokens=4000,
+                max_tokens=16000,
                 response_format={"type": "json_object"},
                 temperature=0,
             )

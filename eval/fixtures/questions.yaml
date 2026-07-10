@@ -1,0 +1,230 @@
+# Eval question set for the Drift / Verida Atoll Marine Survey corpus.
+#
+# Each question:
+#   id                 stable identifier
+#   question_text      the prompt posed to both arms
+#   reference_answer   ground-truth answer controlled by the fixture author
+#   expected_behavior  factual | supersession_resolved | conflict_surfaced
+#   grounding          list of fixture document ids (filename stems) that ground it
+#
+# Grounding doc ids map to eval/fixtures/corpus/<id>.md
+
+- id: q01
+  question_text: What is Drift?
+  reference_answer: Drift is a local-first field-notes application for the Verida Atoll Marine Survey, letting marine biologists record observations offline and sync later.
+  expected_behavior: factual
+  grounding: [00_team-charter, 01_product-vision]
+
+- id: q02
+  question_text: Who is the backend lead on the Drift project?
+  reference_answer: Maren Okafor is the backend lead and owns the sync engine and local datastore.
+  expected_behavior: factual
+  grounding: [02_key-people]
+
+- id: q03
+  question_text: Who owns the Drift sync server and deployment?
+  reference_answer: Priya Raman owns the sync server and deployment.
+  expected_behavior: factual
+  grounding: [02_key-people]
+
+- id: q04
+  question_text: Who is the biologist liaison for Drift?
+  reference_answer: Dr. Iolo Wynne is the biologist liaison, representing the Verida Atoll divers and defining the observation schema.
+  expected_behavior: factual
+  grounding: [02_key-people]
+
+- id: q05
+  question_text: What days does Priya work on Drift?
+  reference_answer: Priya is part-time and works on Drift on Tuesdays and Thursdays only.
+  expected_behavior: factual
+  grounding: [02_key-people]
+
+- id: q06
+  question_text: How is Dr. Wynne reachable on Mondays?
+  reference_answer: Dr. Wynne is reachable by radio from the atoll on Mondays.
+  expected_behavior: factual
+  grounding: [02_key-people]
+
+- id: q07
+  question_text: What are the four survey sectors in Drift?
+  reference_answer: The four survey sectors are north, east, south, and west.
+  expected_behavior: factual
+  grounding: [00_team-charter, 08_species-schema]
+
+- id: q08
+  question_text: Which species does Drift catalogue?
+  reference_answer: "Drift catalogues fictional Verida Atoll endemics: the Verida bubblefish, kelp-glider eel, atoll skipper crab, and reef lantern jelly."
+  expected_behavior: factual
+  grounding: [01_product-vision, 08_species-schema]
+
+- id: q09
+  question_text: What fields does a Drift observation record contain?
+  reference_answer: An observation record contains observation_id, sector, species, count, depth_m, observer, and notes (free text, max 2000 characters).
+  expected_behavior: factual
+  grounding: [08_species-schema]
+
+- id: q10
+  question_text: What is the maximum length of a Drift observation's notes field?
+  reference_answer: The notes field is at most 2000 characters.
+  expected_behavior: factual
+  grounding: [08_species-schema]
+
+- id: q11
+  question_text: What gas options are supported in a Drift dive log?
+  reference_answer: The supported gases are air, nitrox32, and nitrox36.
+  expected_behavior: factual
+  grounding: [10_dive-log-format]
+
+- id: q12
+  question_text: What fields does a Drift dive log entry have?
+  reference_answer: A dive log entry has dive_number, bottom_time_min, max_depth_m, and gas.
+  expected_behavior: factual
+  grounding: [10_dive-log-format]
+
+- id: q13
+  question_text: What is the format of a Drift observation id?
+  reference_answer: Observation ids are lowercase kebab-case of the form obs-<sector>-<yyyymmdd>-<seq>, for example obs-north-20250304-007.
+  expected_behavior: factual
+  grounding: [13_naming-conventions]
+
+- id: q14
+  question_text: How are species names persisted in Drift?
+  reference_answer: Species names are persisted as the full common name with the first word capitalised, e.g. Verida bubblefish; they are never abbreviated in stored data.
+  expected_behavior: factual
+  grounding: [13_naming-conventions]
+
+- id: q15
+  question_text: What is Drift's export format?
+  reference_answer: Drift exports one JSON document per survey sector with the fields sector, exported_at, and observations.
+  expected_behavior: factual
+  grounding: [14_export-format]
+
+- id: q16
+  question_text: Where are Drift exports generated?
+  reference_answer: Exports are generated on the sync server, not on the tablet, so they reflect the synced state rather than local-only edits.
+  expected_behavior: factual
+  grounding: [14_export-format]
+
+- id: q17
+  question_text: How do you include dive logs in a Drift export?
+  reference_answer: Dive logs are excluded by default and added by passing the flag ?include_dive_logs=true.
+  expected_behavior: factual
+  grounding: [14_export-format]
+
+- id: q18
+  question_text: What does the offline-first principle mean for Drift?
+  reference_answer: The app must never require network access to create, edit, or read a note; sync is a background best-effort process and failure to sync must never block logging an observation.
+  expected_behavior: factual
+  grounding: [07_offline-first]
+
+- id: q19
+  question_text: What happens when the local datastore and the sync server disagree?
+  reference_answer: The local copy wins for edits made within the last 24 hours; older conflicts are flagged for Dr. Wynne to review.
+  expected_behavior: factual
+  grounding: [07_offline-first]
+
+- id: q20
+  question_text: What recurring themes come up in Drift team discussions?
+  reference_answer: The recurring themes are offline reliability, data durability, diver ergonomics, sector attribution, and sync predictability.
+  expected_behavior: factual
+  grounding: [12_recurring-themes]
+
+- id: q21
+  question_text: What are the current open items for the Drift team?
+  reference_answer: "The open items are: the KelpFS wrapper scaffold in progress (Maren, due 2025-03-25); conflict review UX for Dr. Wynne undesigned (Theo to propose); sync server deployment target undecided (Priya evaluating options); and backup strategy for the sync server undefined."
+  expected_behavior: factual
+  grounding: [11_open-items]
+
+- id: q22
+  question_text: Describe a diver's observation workflow in Drift.
+  reference_answer: The diver opens the app offline, selects the current sector, creates an observation with species, count, depth, and notes, saves it locally (immediately readable on that tablet), and syncing happens automatically in the background when the network is available.
+  expected_behavior: factual
+  grounding: [09_observation-workflow]
+
+- id: q23
+  question_text: Who reviews flagged conflicts and when?
+  reference_answer: Dr. Wynne reviews flagged conflicts on Mondays via radio from the atoll.
+  expected_behavior: factual
+  grounding: [09_observation-workflow]
+
+- id: q24
+  question_text: What are Drift's accessibility rules for the tablet UI?
+  reference_answer: Text must meet a minimum 18pt equivalent at arm's length; colour is never the sole carrier of information (every status has a text label and icon); touch targets are at least 44x44 points; and the sector selector has four large buttons each with a distinct icon, not just colour.
+  expected_behavior: factual
+  grounding: [15_accessibility]
+
+- id: q25
+  question_text: Who owns accessibility reviews for Drift?
+  reference_answer: Theo owns the accessibility rules and reviews every UI change against them.
+  expected_behavior: factual
+  grounding: [15_accessibility]
+
+- id: q26
+  question_text: What is the size and composition of the Drift team?
+  reference_answer: The Drift team is three engineers and one biologist liaison.
+  expected_behavior: factual
+  grounding: [00_team-charter]
+
+- id: q27
+  question_text: What do Maren and Theo do on Wednesdays?
+  reference_answer: Maren and Theo pair on Wednesdays; they pair-review the sync engine.
+  expected_behavior: factual
+  grounding: [02_key-people, 09_observation-workflow]
+
+- id: q28
+  question_text: What database tables does Drift use?
+  reference_answer: Drift uses the snake_case, domain-prefixed tables obs_observations, obs_dive_logs, and sync_state.
+  expected_behavior: factual
+  grounding: [13_naming-conventions]
+
+- id: q29
+  question_text: What is the purpose of Drift?
+  reference_answer: Drift's purpose is to let Verida Atoll Marine Survey biologists record field observations on boats with no reliable network, then sync later; it catalogues sightings of fictional Verida Atoll endemic species.
+  expected_behavior: factual
+  grounding: [00_team-charter, 01_product-vision]
+
+- id: q30
+  question_text: What kind of devices does Drift run on?
+  reference_answer: Drift runs on ruggedized tablets with intermittent connectivity.
+  expected_behavior: factual
+  grounding: [00_team-charter]
+
+# --- supersession_resolved (dated-supersession pair: BlorbleDB -> KelpFS) ---
+
+- id: q31
+  question_text: What datastore does Drift use on the device?
+  reference_answer: Drift uses KelpFS as the on-device local datastore. The earlier decision to use BlorbleDB (2025-03-04) was reversed on 2025-03-18.
+  expected_behavior: supersession_resolved
+  grounding: [03_datastore-blorbledb, 04_datastore-kelpfs-reversal]
+
+- id: q32
+  question_text: Why did Drift change its datastore?
+  reference_answer: BlorbleDB corrupted two test notebooks during a simulated power-loss trial on 2025-03-15, unrecoverably. KelpFS uses an append-only log with periodic snapshots and survived the same trial with no data loss, so the team reversed the decision on 2025-03-18.
+  expected_behavior: supersession_resolved
+  grounding: [03_datastore-blorbledb, 04_datastore-kelpfs-reversal]
+
+- id: q33
+  question_text: What happened to the BlorbleDB decision?
+  reference_answer: The BlorbleDB decision from 2025-03-04 was reversed on 2025-03-18; Drift now uses KelpFS, the BlorbleDB wrapper work was abandoned, and BlorbleDB is no longer a candidate for Drift.
+  expected_behavior: supersession_resolved
+  grounding: [03_datastore-blorbledb, 04_datastore-kelpfs-reversal]
+
+- id: q34
+  question_text: When is Maren's current datastore wrapper work due?
+  reference_answer: Maren's KelpFS wrapper scaffold is due 2025-03-25.
+  expected_behavior: supersession_resolved
+  grounding: [04_datastore-kelpfs-reversal, 11_open-items]
+
+# --- conflict_surfaced (undated-contradiction pair: 5 min vs 60 sec) ---
+
+- id: q35
+  question_text: What is Drift's sync interval?
+  reference_answer: The sources disagree on Drift's sync interval. One document states 5 minutes (chosen to keep server load predictable across sectors); another states 60 seconds (chosen so divers see each other's notes almost immediately). Neither is dated or marked as superseding, so the disagreement should be surfaced rather than a single value asserted.
+  expected_behavior: conflict_surfaced
+  grounding: [05_sync-interval-5min, 06_sync-interval-60sec]
+
+- id: q36
+  question_text: Why was Drift's sync interval chosen?
+  reference_answer: The sources disagree on both the interval and the rationale. One says 5 minutes to keep server load predictable; the other says 60 seconds so returning divers see each other's notes almost immediately. The conflict should be surfaced, with both rationales cited.
+  expected_behavior: conflict_surfaced
+  grounding: [05_sync-interval-5min, 06_sync-interval-60sec]

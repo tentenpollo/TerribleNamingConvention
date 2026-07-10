@@ -102,7 +102,7 @@ async def summarize_document(
                 "content": _SUMMARY_PROMPT.format(filename=filename, text=text),
             },
         ]
-        llm_result = await llm_call(messages=messages, model=model, max_tokens=1000)
+        llm_result = await llm_call(messages=messages, model=model, max_tokens=8000)
         parsed = json.loads(llm_result.text)
         if isinstance(parsed, dict):
             return parsed
